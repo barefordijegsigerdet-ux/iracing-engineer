@@ -78,7 +78,20 @@ if uploaded_files:
         u_driver = f1_name.split(" - ")[1] if " - " in f1_name else "User"
         r_driver = f2_name.split(" - ")[1] if " - " in f2_name else "Reference"
 
-        # Interpolation Logic
+        # --- NEW SMOOTH DELTA MATH ---
+        # Calculate meters traveled between points
+        df_u['Dist_Diff'] = df_u['LapDistPct'].diff() * track_length
+        df_r['Dist_Diff'] = df_r['LapDistPct'].diff() * track_length
+
+        # Time = Distance / Speed (converted to m/s)
+        u_time_segments = df_u['Dist_Diff'] / (df_u['Speed'] / 3.6).replace(0, 0.1)
+        r_time_segments = df_r['Dist_Diff'] / (df_r['Speed'] / 3.6).replace(0, 0.1)
+
+        # Build cumulative time
+        u_total_time = np.cumsum(u_time_segments.fillna(0))
+        r_total_time = np.cumsum(r_time_segments.fillna(0))
+
+        # Interpolate for side-by-side comparison
         dist_common = np.linspace(0, 1, 5000)
         u_speed = np.interp(dist_common, df_u['LapDistPct'], df_u['Speed'] * 3.6)
         r_speed = np.interp(dist_common, df_r['LapDistPct'], df_r['Speed'] * 3.6)
@@ -87,11 +100,11 @@ if uploaded_files:
         u_thr = np.interp(dist_common, df_u['LapDistPct'], df_u['Throttle'])
         r_thr = np.interp(dist_common, df_r['LapDistPct'], df_r['Throttle'])
         
-        dx = track_length / 5000 
-        u_time = np.cumsum(dx / np.maximum(u_speed/3.6, 0.1))
-        r_time = np.cumsum(dx / np.maximum(r_speed/3.6, 0.1))
-        delta = u_time - r_time
+        u_time_interp = np.interp(dist_common, df_u['LapDistPct'], u_total_time)
+        r_time_interp = np.interp(dist_common, df_r['LapDistPct'], r_total_time)
+        delta = u_time_interp - r_time_interp
 
+        # --- PLOTTING ---
         fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.4, 0.15, 0.2, 0.2])
         fig.add_trace(go.Scatter(x=dist_common, y=r_speed, name=f"{r_driver} Speed", line=dict(color='blue')), row=1, col=1)
         fig.add_trace(go.Scatter(x=dist_common, y=u_speed, name=f"{u_driver} Speed", line=dict(color='red')), row=1, col=1)
@@ -104,7 +117,7 @@ if uploaded_files:
         fig.update_layout(height=1000, hovermode='x unified')
         st.plotly_chart(fig, use_container_width=True)
 
-# --- AI COACHING SECTION ---
+        # --- AI COACHING SECTION ---
         st.divider()
         st.header("🧠 AI Coach Feedback")
         
@@ -112,13 +125,8 @@ if uploaded_files:
             if st.button("Analyze my driving with AI"):
                 try:
                     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+                    available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
                     
-                    # 1. Automatically find the best current model
-                    # This avoids 404 errors by asking the server what is available
-                    available_models = [m.name for m in genai.list_models() 
-                                      if 'generateContent' in m.supported_generation_methods]
-                    
-                    # We prefer 3.1 Flash or 2.5 Flash if they exist
                     target_model = None
                     for preference in ["3.1-flash", "2.5-flash", "1.5-flash", "pro"]:
                         match = next((m for m in available_models if preference in m), None)
@@ -127,9 +135,8 @@ if uploaded_files:
                             break
                     
                     if not target_model:
-                        target_model = available_models[0] # Fallback to first available
+                        target_model = available_models[0]
 
-                    # 2. Data Prep
                     max_loss_val = delta.max()
                     loss_pct = dist_common[np.argmax(delta)] * 100
                     
