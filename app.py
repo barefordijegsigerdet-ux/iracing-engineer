@@ -57,13 +57,12 @@ if ref_file and user_file:
     df_r.columns = df_r.columns.str.strip()
     df_u.columns = df_u.columns.str.strip()
 
-    # Sort and remove duplicates to prevent interpolation crashes
     df_r = df_r.sort_values('LapDistPct').drop_duplicates('LapDistPct')
     df_u = df_u.sort_values('LapDistPct').drop_duplicates('LapDistPct')
 
     st.header("🏎️ Comparative Analysis")
     
-    # Calculate incremental time for each driver separately
+    # Distance/Time Math
     df_u['Dist_Diff'] = df_u['LapDistPct'].diff().fillna(0) * track_length
     df_r['Dist_Diff'] = df_r['LapDistPct'].diff().fillna(0) * track_length
 
@@ -73,34 +72,48 @@ if ref_file and user_file:
     u_total_time = np.cumsum(u_time_seg)
     r_total_time = np.cumsum(r_time_seg)
 
-    # Standardize to 5,000 points in METERS
     dist_pct = np.linspace(0, 1, 5000)
     dist_meters = dist_pct * track_length
     
-    # SAFE INTERPOLATION: Always compare user_dist to user_data, ref_dist to ref_data
+    # Interpolation + Multiply Pedals by 100
     u_speed = np.interp(dist_pct, df_u['LapDistPct'], df_u['Speed'] * 3.6)
     r_speed = np.interp(dist_pct, df_r['LapDistPct'], df_r['Speed'] * 3.6)
-    u_brake = np.interp(dist_pct, df_u['LapDistPct'], df_u['Brake'])
-    r_brake = np.interp(dist_pct, df_r['LapDistPct'], df_r['Brake'])
-    u_thr = np.interp(dist_pct, df_u['LapDistPct'], df_u['Throttle'])
-    r_thr = np.interp(dist_pct, df_r['LapDistPct'], df_r['Throttle'])
     
-    # This was the bug fix line:
+    u_brake = np.interp(dist_pct, df_u['LapDistPct'], df_u['Brake']) * 100
+    r_brake = np.interp(dist_pct, df_r['LapDistPct'], df_r['Brake']) * 100
+    
+    u_thr = np.interp(dist_pct, df_u['LapDistPct'], df_u['Throttle']) * 100
+    r_thr = np.interp(dist_pct, df_r['LapDistPct'], df_r['Throttle']) * 100
+    
     u_time_i = np.interp(dist_pct, df_u['LapDistPct'], u_total_time)
     r_time_i = np.interp(dist_pct, df_r['LapDistPct'], r_total_time)
     delta = u_time_i - r_time_i
 
     # Plotting
     fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.4, 0.15, 0.2, 0.2])
+    
+    # Speed
     fig.add_trace(go.Scatter(x=dist_meters, y=r_speed, name="Ref Speed", line=dict(color='blue')), row=1, col=1)
     fig.add_trace(go.Scatter(x=dist_meters, y=u_speed, name="Your Speed", line=dict(color='red')), row=1, col=1)
+    
+    # Delta
     fig.add_trace(go.Scatter(x=dist_meters, y=delta, name="Time Delta", fill='tozeroy', line=dict(color='gray')), row=2, col=1)
-    fig.add_trace(go.Scatter(x=dist_meters, y=r_brake, name="Ref Brake", line=dict(color='blue', dash='dot')), row=3, col=1)
-    fig.add_trace(go.Scatter(x=dist_meters, y=u_brake, name="Your Brake", line=dict(color='red', dash='dot')), row=3, col=1)
-    fig.add_trace(go.Scatter(x=dist_meters, y=r_thr, name="Ref Throttle", line=dict(color='rgba(0,0,255,0.2)')), row=4, col=1)
-    fig.add_trace(go.Scatter(x=dist_meters, y=u_thr, name="Your Throttle", line=dict(color='rgba(255,0,0,0.2)')), row=4, col=1)
+    
+    # Brake (0-100%)
+    fig.add_trace(go.Scatter(x=dist_meters, y=r_brake, name="Ref Brake %", line=dict(color='blue', dash='dot')), row=3, col=1)
+    fig.add_trace(go.Scatter(x=dist_meters, y=u_brake, name="Your Brake %", line=dict(color='red', dash='dot')), row=3, col=1)
+    
+    # Throttle (0-100%)
+    fig.add_trace(go.Scatter(x=dist_meters, y=r_thr, name="Ref Throttle %", line=dict(color='rgba(0,0,255,0.2)')), row=4, col=1)
+    fig.add_trace(go.Scatter(x=dist_meters, y=u_thr, name="Your Throttle %", line=dict(color='rgba(255,0,0,0.2)')), row=4, col=1)
 
+    # UI Cleanup
     fig.update_layout(height=900, hovermode='x unified', xaxis4_title="Distance (Meters)")
+    fig.update_yaxes(title_text="km/h", row=1, col=1)
+    fig.update_yaxes(title_text="Delta (s)", row=2, col=1)
+    fig.update_yaxes(title_text="Brake %", range=[-5, 105], row=3, col=1)
+    fig.update_yaxes(title_text="Throttle %", range=[-5, 105], row=4, col=1)
+    
     st.plotly_chart(fig, use_container_width=True)
 
     # --- AI COACHING ---
@@ -110,17 +123,16 @@ if ref_file and user_file:
         if st.button("Get AI Analysis"):
             try:
                 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                # Modern model picker for 2026
                 models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                target = next((m for m in models if "3.1-flash" in m or "2.5-flash" in m), models[0])
-                
+                target = next((m for m in models if "flash" in m), models[0])
                 model = genai.GenerativeModel(target)
+                
                 max_loss = delta.max()
                 loss_loc = dist_meters[np.argmax(delta)] 
                 
-                prompt = f"Professional race engineer: Driver losing {max_loss:.3f}s at {loss_loc:.0f} meters into the lap in {car_type} at {selected_track}. Provide 2 sentences of technical advice."
+                prompt = f"Professional race engineer: Driver losing {max_loss:.3f}s at {loss_loc:.0f}m in {car_type} at {selected_track}. 2 technical sentences."
                 
-                with st.spinner(f"Engineer is analyzing..."):
+                with st.spinner("Reviewing..."):
                     st.info(model.generate_content(prompt).text)
             except Exception as e:
-                st.error(f"AI System Error: {e}")
+                st.error(f"AI Error: {e}")
