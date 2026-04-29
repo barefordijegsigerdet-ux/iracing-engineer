@@ -57,25 +57,27 @@ if ref_file and user_file:
     df_r.columns = df_r.columns.str.strip()
     df_u.columns = df_u.columns.str.strip()
 
+    # Sort and remove duplicates to prevent interpolation crashes
     df_r = df_r.sort_values('LapDistPct').drop_duplicates('LapDistPct')
     df_u = df_u.sort_values('LapDistPct').drop_duplicates('LapDistPct')
 
     st.header("🏎️ Comparative Analysis")
     
-    # Delta Math
+    # Calculate incremental time for each driver separately
     df_u['Dist_Diff'] = df_u['LapDistPct'].diff().fillna(0) * track_length
     df_r['Dist_Diff'] = df_r['LapDistPct'].diff().fillna(0) * track_length
 
-    u_time_segments = df_u['Dist_Diff'] / (df_u['Speed'] / 3.6).replace(0, 0.1)
-    r_time_segments = df_r['Dist_Diff'] / (df_r['Speed'] / 3.6).replace(0, 0.1)
+    u_time_seg = df_u['Dist_Diff'] / (df_u['Speed'] / 3.6).replace(0, 0.1)
+    r_time_seg = df_r['Dist_Diff'] / (df_r['Speed'] / 3.6).replace(0, 0.1)
 
-    u_total_time = np.cumsum(u_time_segments)
-    r_total_time = np.cumsum(r_time_segments)
+    u_total_time = np.cumsum(u_time_seg)
+    r_total_time = np.cumsum(r_time_seg)
 
-    # CREATE X-AXIS IN METERS
+    # Standardize to 5,000 points in METERS
     dist_pct = np.linspace(0, 1, 5000)
-    dist_meters = dist_pct * track_length # This converts 0.0-1.0 to 0m-4259m
+    dist_meters = dist_pct * track_length
     
+    # SAFE INTERPOLATION: Always compare user_dist to user_data, ref_dist to ref_data
     u_speed = np.interp(dist_pct, df_u['LapDistPct'], df_u['Speed'] * 3.6)
     r_speed = np.interp(dist_pct, df_r['LapDistPct'], df_r['Speed'] * 3.6)
     u_brake = np.interp(dist_pct, df_u['LapDistPct'], df_u['Brake'])
@@ -83,11 +85,12 @@ if ref_file and user_file:
     u_thr = np.interp(dist_pct, df_u['LapDistPct'], df_u['Throttle'])
     r_thr = np.interp(dist_pct, df_r['LapDistPct'], df_r['Throttle'])
     
+    # This was the bug fix line:
     u_time_i = np.interp(dist_pct, df_u['LapDistPct'], u_total_time)
-    r_time_i = np.interp(dist_pct, df_u['LapDistPct'], r_total_time)
+    r_time_i = np.interp(dist_pct, df_r['LapDistPct'], r_total_time)
     delta = u_time_i - r_time_i
 
-    # Plotting using dist_meters as the X value
+    # Plotting
     fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.4, 0.15, 0.2, 0.2])
     fig.add_trace(go.Scatter(x=dist_meters, y=r_speed, name="Ref Speed", line=dict(color='blue')), row=1, col=1)
     fig.add_trace(go.Scatter(x=dist_meters, y=u_speed, name="Your Speed", line=dict(color='red')), row=1, col=1)
@@ -107,16 +110,17 @@ if ref_file and user_file:
         if st.button("Get AI Analysis"):
             try:
                 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+                # Modern model picker for 2026
                 models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                target = next((m for m in models if "flash" in m), models[0])
+                target = next((m for m in models if "3.1-flash" in m or "2.5-flash" in m), models[0])
                 
                 model = genai.GenerativeModel(target)
                 max_loss = delta.max()
-                loss_loc_meters = dist_meters[np.argmax(delta)] 
+                loss_loc = dist_meters[np.argmax(delta)] 
                 
-                prompt = f"Professional race engineer: Driver losing {max_loss:.3f}s at {loss_loc_meters:.0f} meters into the lap in {car_type} at {selected_track}. 2 technical sentences."
+                prompt = f"Professional race engineer: Driver losing {max_loss:.3f}s at {loss_loc:.0f} meters into the lap in {car_type} at {selected_track}. Provide 2 sentences of technical advice."
                 
-                with st.spinner(f"Engineer is analyzing meters..."):
+                with st.spinner(f"Engineer is analyzing..."):
                     st.info(model.generate_content(prompt).text)
             except Exception as e:
                 st.error(f"AI System Error: {e}")
