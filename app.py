@@ -94,30 +94,39 @@ if ref_file and user_file:
     r_time_i = np.interp(dist_pct, df_r['LapDistPct'], r_total_time)
     delta = u_time_i - r_time_i
 
-   # 1. TRACK MAP (G61 Style Speed Map)
+  # 1. TRACK MAP (G61 Style Speed Map)
     st.subheader("📍 Track Map Analysis")
     
+    # Try to find real coordinates in the G61 CSV
     if 'PosX' in df_u.columns and 'PosY' in df_u.columns:
         map_x, map_y = df_u['PosX'], df_u['PosY']
+    elif 'Lat' in df_u.columns and 'Lon' in df_u.columns:
+        map_x, map_y = df_u['Lon'], df_u['Lat']
+    elif 'Yaw' in df_u.columns:
+        # Reconstruct shape from Yaw (Heading) and Speed
+        # This turns 'steering' data into a physical path
+        dt = df_u['LapDistPct'].diff().fillna(0) * track_length
+        x_rec = np.cumsum(dt * np.cos(df_u['Yaw']))
+        y_rec = np.cumsum(dt * np.sin(df_u['Yaw']))
+        # Resample to 5000 points
+        map_x = np.interp(dist_pct, df_u['LapDistPct'], x_rec)
+        map_y = np.interp(dist_pct, df_u['LapDistPct'], y_rec)
     else:
-        # Better fallback projection
+        # Fallback to the circle if no spatial data exists
         angle = dist_pct * 2 * np.pi
         map_x = np.cos(angle) * 1000 
         map_y = np.sin(angle) * 1000
 
-    # Fixed: Using marker for color coloring to avoid the line-color ValueError
     fig_map = go.Figure(data=go.Scatter(
-        x=map_x, 
-        y=map_y, 
-        mode='markers+lines',
+        x=map_x, y=map_y, 
+        mode='markers',
         marker=dict(
-            size=2,
+            size=3,
             color=u_speed, 
             colorscale='Turbo',
             showscale=True,
-            colorbar=dict(title="km/h", thickness=15)
+            colorbar=dict(title="km/h")
         ),
-        line=dict(color='rgba(100,100,100,0.2)', width=1), # Light grey path
         name="Track Path",
         hovertemplate="Speed: %{marker.color:.1f} km/h<extra></extra>"
     ))
@@ -128,7 +137,8 @@ if ref_file and user_file:
         xaxis_visible=False, 
         yaxis_visible=False,
         plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)'
+        paper_bgcolor='rgba(0,0,0,0)',
+        yaxis_scaleanchor="x", # This keeps the track from looking 'stretched'
     )
     st.plotly_chart(fig_map, use_container_width=True)
 
