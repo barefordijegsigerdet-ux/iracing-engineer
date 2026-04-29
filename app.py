@@ -94,21 +94,42 @@ if ref_file and user_file:
     r_time_i = np.interp(dist_pct, df_r['LapDistPct'], r_total_time)
     delta = u_time_i - r_time_i
 
-    # 1. TRACK MAP (G61 Style Speed Map)
+   # 1. TRACK MAP (G61 Style Speed Map)
     st.subheader("📍 Track Map Analysis")
-    # If PosX/PosY exist in CSV, use them. Else, use a projection.
+    
     if 'PosX' in df_u.columns and 'PosY' in df_u.columns:
         map_x, map_y = df_u['PosX'], df_u['PosY']
     else:
-        map_x = np.cos(dist_pct * 2 * np.pi) * (u_speed + 500)
-        map_y = np.sin(dist_pct * 2 * np.pi) * (u_speed + 500)
+        # Better fallback projection
+        angle = dist_pct * 2 * np.pi
+        map_x = np.cos(angle) * 1000 
+        map_y = np.sin(angle) * 1000
 
+    # Fixed: Using marker for color coloring to avoid the line-color ValueError
     fig_map = go.Figure(data=go.Scatter(
-        x=map_x, y=map_y, mode='lines',
-        line=dict(color=u_speed, colorscale='Turbo', width=5),
+        x=map_x, 
+        y=map_y, 
+        mode='markers+lines',
+        marker=dict(
+            size=2,
+            color=u_speed, 
+            colorscale='Turbo',
+            showscale=True,
+            colorbar=dict(title="km/h", thickness=15)
+        ),
+        line=dict(color='rgba(100,100,100,0.2)', width=1), # Light grey path
+        name="Track Path",
         hovertemplate="Speed: %{marker.color:.1f} km/h<extra></extra>"
     ))
-    fig_map.update_layout(height=400, margin=dict(l=0,r=0,t=0,b=0), xaxis_visible=False, yaxis_visible=False)
+    
+    fig_map.update_layout(
+        height=500, 
+        margin=dict(l=0,r=0,t=0,b=0), 
+        xaxis_visible=False, 
+        yaxis_visible=False,
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)'
+    )
     st.plotly_chart(fig_map, use_container_width=True)
 
     # 2. SECTOR METRICS (G61 Names)
