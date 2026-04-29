@@ -109,15 +109,27 @@ if uploaded_files:
         st.header("🧠 AI Coach Feedback")
         
         if "GEMINI_API_KEY" in st.secrets:
-            # We use a button so the AI doesn't fire on every single page refresh
             if st.button("Analyze my driving with AI"):
                 try:
                     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
                     
-                    # Target a specific reliable model for your region
-                    # gemini-1.5-flash is the most 'generous' with free limits
-                    model_name = 'gemini-1.5-flash'
+                    # 1. Automatically find the best current model
+                    # This avoids 404 errors by asking the server what is available
+                    available_models = [m.name for m in genai.list_models() 
+                                      if 'generateContent' in m.supported_generation_methods]
                     
+                    # We prefer 3.1 Flash or 2.5 Flash if they exist
+                    target_model = None
+                    for preference in ["3.1-flash", "2.5-flash", "1.5-flash", "pro"]:
+                        match = next((m for m in available_models if preference in m), None)
+                        if match:
+                            target_model = match
+                            break
+                    
+                    if not target_model:
+                        target_model = available_models[0] # Fallback to first available
+
+                    # 2. Data Prep
                     max_loss_val = delta.max()
                     loss_pct = dist_common[np.argmax(delta)] * 100
                     
@@ -128,14 +140,14 @@ if uploaded_files:
                     Provide 1-2 technical sentences on how to fix this loss.
                     """
                     
-                    with st.spinner(f"Engineer is reviewing your telemetry..."):
-                        model = genai.GenerativeModel(model_name)
+                    with st.spinner(f"Engineer ({target_model.split('/')[-1]}) is reviewing..."):
+                        model = genai.GenerativeModel(target_model)
                         response = model.generate_content(prompt)
                         st.info(response.text)
                         
                 except Exception as e:
                     if "429" in str(e):
-                        st.error("Too many requests! Wait 60 seconds and try again. The free tier has a speed limit.")
+                        st.error("Free Tier Limit: Please wait 60 seconds and try again.")
                     else:
                         st.error(f"AI System Error: {e}")
         else:
