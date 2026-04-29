@@ -4,63 +4,63 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="Sim Engineering", layout="wide")
-st.title("🏁 Race Engineering Dashboard")
+st.set_page_config(page_title="Universal Sim Engineer", layout="wide")
+st.title("🏁 Universal Sim Engineer")
 
-# Sidebar for Inputs
-st.sidebar.header("Session Settings")
-car_type = st.sidebar.selectbox("Select Car", ["Porsche 911 Cup (992.2)", "GT3 Class", "Formula 4"])
-track_name = st.sidebar.text_input("Track Name", "Zandvoort")
-setup_type = st.sidebar.radio("Setup", ["Fixed", "Open"])
+# Sidebar
+st.sidebar.header("Global Settings")
+car_type = st.sidebar.selectbox("Car Type", ["Porsche 911 Cup (992.2)", "GT3 Class", "Formula 4", "Other"])
+track = st.sidebar.text_input("Track", "Zandvoort")
 
-# File Uploaders
+# File Uploaders with generic names
 col1, col2 = st.columns(2)
 with col1:
-    u_file = st.file_uploader("Upload YOUR Lap (Jonas)", type="csv")
+    u_file = st.file_uploader("Upload YOUR Lap (CSV)", type="csv")
 with col2:
-    b_file = st.file_uploader("Upload REFERENCE Lap (Leeroy)", type="csv")
+    r_file = st.file_uploader("Upload REFERENCE Lap (CSV)", type="csv")
 
-if u_file and b_file:
-    # 1. Load Data
+if u_file and r_file:
+    # Load Data
     df_u = pd.read_csv(u_file)
-    df_b = pd.read_csv(b_file)
+    df_r = pd.read_csv(r_file)
 
-    # 2. Distance Interpolation (Crucial for Accuracy)
-    # We use 5000 points to represent the track
+    # Detect Driver Names from filenames (strip the Garage 61 prefix)
+    u_name = u_file.name.split(" - ")[1] if " - " in u_file.name else "Driver A"
+    r_name = r_file.name.split(" - ")[1] if " - " in r_file.name else "Driver B"
+
+    st.success(f"Comparing **{u_name}** vs **{r_name}**")
+
+    # Math Logic
     dist_common = np.linspace(0, 1, 5000)
-    
     u_speed = np.interp(dist_common, df_u['LapDistPct'], df_u['Speed'] * 3.6)
-    b_speed = np.interp(dist_common, df_b['LapDistPct'], df_b['Speed'] * 3.6)
+    r_speed = np.interp(dist_common, df_r['LapDistPct'], df_r['Speed'] * 3.6)
     u_brake = np.interp(dist_common, df_u['LapDistPct'], df_u['Brake'])
-    b_brake = np.interp(dist_common, df_b['LapDistPct'], df_b['Brake'])
+    r_brake = np.interp(dist_common, df_r['LapDistPct'], df_r['Brake'])
     
-    # 3. Calculate Time Delta
-    # Approximation: dt = dx/v. 
-    # For a 4000m track, each step is 0.8m.
+    # Calculate Time Delta (assuming ~4200m track if not known)
     dx = 4259 / 5000 
     u_time = np.cumsum(dx / np.maximum(u_speed/3.6, 0.1))
-    b_time = np.cumsum(dx / np.maximum(b_speed/3.6, 0.1))
-    delta = u_time - b_time
+    r_time = np.cumsum(dx / np.maximum(r_speed/3.6, 0.1))
+    delta = u_time - r_time
 
-    # 4. Interactive Plotly Charts
-    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
-                        vertical_spacing=0.05, row_heights=[0.5, 0.2, 0.3])
+    # Create Charts
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05)
 
-    # Speed Trace
-    fig.add_trace(go.Scatter(x=dist_common, y=b_speed, name="Pro Speed", line=dict(color='blue')), row=1, col=1)
-    fig.add_trace(go.Scatter(x=dist_common, y=u_speed, name="User Speed", line=dict(color='red')), row=1, col=1)
+    # Speed
+    fig.add_trace(go.Scatter(x=dist_common, y=r_speed, name=f"{r_name} (Ref)", line=dict(color='blue')), row=1, col=1)
+    fig.add_trace(go.Scatter(x=dist_common, y=u_speed, name=f"{u_name} (You)", line=dict(color='red')), row=1, col=1)
     
-    # Delta Trace
-    fig.add_trace(go.Scatter(x=dist_common, y=delta, name="Time Delta", fill='tozeroy', line=dict(color='black')), row=2, col=1)
+    # Delta
+    fig.add_trace(go.Scatter(x=dist_common, y=delta, name="Time Delta", fill='tozeroy', line=dict(color='gray')), row=2, col=1)
     
-    # Brake Trace
-    fig.add_trace(go.Scatter(x=dist_common, y=b_brake, name="Pro Brake", line=dict(color='blue', dash='dash')), row=3, col=1)
-    fig.add_trace(go.Scatter(x=dist_common, y=u_brake, name="User Brake", line=dict(color='red', dash='dash')), row=3, col=1)
+    # Brake
+    fig.add_trace(go.Scatter(x=dist_common, y=r_brake, name=f"{r_name} Brake", line=dict(color='blue', dash='dot')), row=3, col=1)
+    fig.add_trace(go.Scatter(x=dist_common, y=u_brake, name=f"{u_name} Brake", line=dict(color='red', dash='dot')), row=3, col=1)
 
-    fig.update_layout(height=800, hovermode='x unified', title_text=f"Analysis: {track_name}")
+    fig.update_layout(height=800, hovermode='x unified')
     st.plotly_chart(fig, use_container_width=True)
 
-    # 5. Summary Insights
-    st.subheader("📋 Key Insights")
+    # Summary Insight
+    st.subheader("📋 Engineer's Summary")
     max_loss_idx = np.argmax(delta)
-    st.warning(f"Maximum time loss of {delta.max():.3f}s occurs at {dist_common[max_loss_idx]*100:.1f}% of the lap.")
+    st.info(f"The largest gap is {delta.max():.3f}s. {u_name} is losing the most time at {dist_common[max_loss_idx]*100:.1f}% of the lap.")
