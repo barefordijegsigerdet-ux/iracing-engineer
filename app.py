@@ -111,34 +111,41 @@ if uploaded_files:
             try:
                 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
                 
-                # We try three models in order of speed/availability
-                model_names = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
-                response = None
+                # 1. Scan for available models allowed for YOUR key/region
+                available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
                 
-                max_loss_val = delta.max()
-                loss_pct = dist_common[np.argmax(delta)] * 100
-                prompt = f"""
-                Act as a professional race engineer. Compare Driver {u_driver} to Reference {r_driver}.
-                Car: {car_type} at {selected_track}.
-                Data: Max time loss is {max_loss_val:.3f}s at {loss_pct:.1f}% of the lap.
-                Tell the driver exactly what to do at that point of the track to gain time. Keep it under 2 sentences.
-                """
+                if not available_models:
+                    st.error("Your API key doesn't have access to any models yet. Check AI Studio.")
+                else:
+                    # 2. Pick the best one available (Prefer Flash, then Pro)
+                    # We look for the strings in the list of names
+                    target_model = None
+                    for preference in ["1.5-flash", "1.5-pro", "gemini-pro"]:
+                        match = next((m for m in available_models if preference in m), None)
+                        if match:
+                            target_model = match
+                            break
+                    
+                    if not target_model:
+                        target_model = available_models[0] # Just use whatever is first
 
-                for m_name in model_names:
-                    try:
-                        model = genai.GenerativeModel(m_name)
-                        with st.spinner(f"Consulting {m_name}..."):
-                            response = model.generate_content(prompt)
-                        if response:
-                            st.info(response.text)
-                            break # Success! Exit the loop.
-                    except Exception:
-                        continue # If this model fails, try the next one
-                
-                if not response:
-                    st.error("AI is currently unavailable in your region. Check your API key status.")
-
+                    # 3. Generate Feedback
+                    max_loss_val = delta.max()
+                    loss_pct = dist_common[np.argmax(delta)] * 100
+                    prompt = f"""
+                    Act as a professional race engineer. Compare Driver {u_driver} to Reference {r_driver}.
+                    Car: {car_type} at {selected_track}.
+                    Data: Max time loss is {max_loss_val:.3f}s at {loss_pct:.1f}% of the lap.
+                    Tell the driver exactly what to do at that point of the track to gain time. Keep it under 2 sentences.
+                    """
+                    
+                    with st.spinner(f"Race Engineer ({target_model}) is thinking..."):
+                        model = genai.GenerativeModel(target_model)
+                        response = model.generate_content(prompt)
+                        st.info(response.text)
+                        
             except Exception as e:
                 st.error(f"AI System Error: {e}")
+                st.write("Diagnostic: Please ensure your API Key is active at aistudio.google.com")
         else:
             st.warning("Missing API Key in Secrets.")
