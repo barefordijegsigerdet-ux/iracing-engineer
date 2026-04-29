@@ -104,23 +104,41 @@ if uploaded_files:
         fig.update_layout(height=1000, hovermode='x unified')
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- AI COACHING SECTION ---
+# --- AI COACHING SECTION ---
         st.divider()
         st.header("🧠 AI Coach Feedback")
         if "GEMINI_API_KEY" in st.secrets:
             try:
                 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                
+                # We try three models in order of speed/availability
+                model_names = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
+                response = None
+                
                 max_loss_val = delta.max()
                 loss_pct = dist_common[np.argmax(delta)] * 100
-                prompt = f"Professional race engineer tip: Driver losing {max_loss_val:.3f}s at {loss_pct:.1f}% lap distance in {car_type} at {selected_track}. Give a 2-sentence tip."
-                with st.spinner("Analyzing..."):
-                    response = model.generate_content(prompt)
-                    st.info(response.text)
+                prompt = f"""
+                Act as a professional race engineer. Compare Driver {u_driver} to Reference {r_driver}.
+                Car: {car_type} at {selected_track}.
+                Data: Max time loss is {max_loss_val:.3f}s at {loss_pct:.1f}% of the lap.
+                Tell the driver exactly what to do at that point of the track to gain time. Keep it under 2 sentences.
+                """
+
+                for m_name in model_names:
+                    try:
+                        model = genai.GenerativeModel(m_name)
+                        with st.spinner(f"Consulting {m_name}..."):
+                            response = model.generate_content(prompt)
+                        if response:
+                            st.info(response.text)
+                            break # Success! Exit the loop.
+                    except Exception:
+                        continue # If this model fails, try the next one
+                
+                if not response:
+                    st.error("AI is currently unavailable in your region. Check your API key status.")
+
             except Exception as e:
-                st.error(f"AI Error: {e}")
+                st.error(f"AI System Error: {e}")
         else:
             st.warning("Missing API Key in Secrets.")
-
-else:
-    st.info("👋 Upload Garage 61 CSVs to start.")
