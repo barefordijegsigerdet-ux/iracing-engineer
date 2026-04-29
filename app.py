@@ -107,45 +107,36 @@ if uploaded_files:
 # --- AI COACHING SECTION ---
         st.divider()
         st.header("🧠 AI Coach Feedback")
+        
         if "GEMINI_API_KEY" in st.secrets:
-            try:
-                genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                
-                # 1. Scan for available models allowed for YOUR key/region
-                available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                
-                if not available_models:
-                    st.error("Your API key doesn't have access to any models yet. Check AI Studio.")
-                else:
-                    # 2. Pick the best one available (Prefer Flash, then Pro)
-                    # We look for the strings in the list of names
-                    target_model = None
-                    for preference in ["1.5-flash", "1.5-pro", "gemini-pro"]:
-                        match = next((m for m in available_models if preference in m), None)
-                        if match:
-                            target_model = match
-                            break
+            # We use a button so the AI doesn't fire on every single page refresh
+            if st.button("Analyze my driving with AI"):
+                try:
+                    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
                     
-                    if not target_model:
-                        target_model = available_models[0] # Just use whatever is first
-
-                    # 3. Generate Feedback
+                    # Target a specific reliable model for your region
+                    # gemini-1.5-flash is the most 'generous' with free limits
+                    model_name = 'gemini-1.5-flash'
+                    
                     max_loss_val = delta.max()
                     loss_pct = dist_common[np.argmax(delta)] * 100
+                    
                     prompt = f"""
                     Act as a professional race engineer. Compare Driver {u_driver} to Reference {r_driver}.
                     Car: {car_type} at {selected_track}.
                     Data: Max time loss is {max_loss_val:.3f}s at {loss_pct:.1f}% of the lap.
-                    Tell the driver exactly what to do at that point of the track to gain time. Keep it under 2 sentences.
+                    Provide 1-2 technical sentences on how to fix this loss.
                     """
                     
-                    with st.spinner(f"Race Engineer ({target_model}) is thinking..."):
-                        model = genai.GenerativeModel(target_model)
+                    with st.spinner(f"Engineer is reviewing your telemetry..."):
+                        model = genai.GenerativeModel(model_name)
                         response = model.generate_content(prompt)
                         st.info(response.text)
                         
-            except Exception as e:
-                st.error(f"AI System Error: {e}")
-                st.write("Diagnostic: Please ensure your API Key is active at aistudio.google.com")
+                except Exception as e:
+                    if "429" in str(e):
+                        st.error("Too many requests! Wait 60 seconds and try again. The free tier has a speed limit.")
+                    else:
+                        st.error(f"AI System Error: {e}")
         else:
             st.warning("Missing API Key in Secrets.")
