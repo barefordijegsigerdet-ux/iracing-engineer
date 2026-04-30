@@ -1,166 +1,165 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import os
 
 # --- 1. SYSTEM CONFIGURATION ---
-st.set_page_config(page_title="Race Engineer Pro | 992.2 Cup", layout="wide")
+st.set_page_config(page_title="Race Engineer Pro | Diagnostics", layout="wide")
 
 def apply_custom_css():
     st.markdown("""
         <style>
         .main { background-color: #0e1117; color: #e0e0e0; }
         .stMetric { background-color: #161b22; border: 1px solid #30363d; padding: 15px; border-radius: 8px; border: 1px solid #30363d; }
-        .coach-card { background-color: #1c2128; border-left: 5px solid #00a2ff; padding: 15px; margin-bottom: 10px; border-radius: 4px; }
-        .critical-card { background-color: #2d1b1e; border-left: 5px solid #ff3344; padding: 15px; margin-bottom: 10px; border-radius: 4px; }
+        .critical-card { background-color: #2d1b1e; border-left: 10px solid #ff3344; padding: 20px; margin-bottom: 15px; border-radius: 4px; border: 1px solid #4d1b1e; }
+        .warning-card { background-color: #2d261b; border-left: 10px solid #ffcc00; padding: 20px; margin-bottom: 15px; border-radius: 4px; border: 1px solid #4d401b; }
+        .success-card { background-color: #1b2d1e; border-left: 10px solid #00ff88; padding: 20px; margin-bottom: 15px; border-radius: 4px; border: 1px solid #1b4d24; }
+        .stat-label { font-size: 0.8rem; color: #8b949e; text-transform: uppercase; }
+        .stat-value { font-size: 1.2rem; font-weight: bold; color: #ffffff; }
         </style>
     """, unsafe_allow_html=True)
 
-# --- 2. ROBUST PHYSICS ENGINE ---
+# --- 2. THE DIAGNOSTIC ENGINE ---
 
 def process_telemetry(df):
-    # Clean up whitespace in headers
     df.columns = [c.strip() for c in df.columns]
-    
-    # ADVANCED DISTANCE DETECTION: Detect any column containing "dist"
     dist_cols = [c for c in df.columns if 'dist' in c.lower()]
-    if not dist_cols:
-        st.error(f"Data Error: No distance column found. Available: {list(df.columns)}")
-        st.stop()
+    if not dist_cols: st.stop()
+    df['Dist'] = pd.to_numeric(df[dist_cols[0]], errors='coerce').fillna(0)
     
-    # Standardize distance column name to 'Dist'
-    target_dist = dist_cols[0]
-    df['Dist'] = pd.to_numeric(df[target_dist], errors='coerce').fillna(0)
-    
-    # Normalization: m/s² to G-force
+    # Physics Normalization
     for col in ['LatAccel', 'LongAccel', 'LonAccel']:
         if col in df.columns:
             df[col.replace('Accel', 'G')] = pd.to_numeric(df[col], errors='coerce').fillna(0) / 9.81
     
-    # ABS: Convert string/boolean to float
     if 'ABSActive' in df.columns:
         df['ABSActive'] = df['ABSActive'].map({'true': 1, 'false': 0, 1: 1, 0: 0, True: 1, False: 0}).fillna(0)
     
-    # Speed: Ensure km/h
     if 'Speed' in df.columns:
         df['Speed'] = pd.to_numeric(df['Speed'], errors='coerce').fillna(0)
         if df['Speed'].max() < 100: df['Speed'] *= 3.6 
         
     return df.sort_values('Dist').reset_index(drop=True)
 
-def align_and_resample(df_d, df_b, points=5000):
-    # Use Benchmark as the master distance grid
+def analyze_performance(df_d, df_b):
+    # Anchor to Benchmark
     max_dist = df_b['Dist'].max()
-    grid = np.linspace(0, max_dist, points)
+    grid = np.linspace(0, max_dist, 5000)
     
     def interp_lap(df):
         out = pd.DataFrame({'Dist': grid})
-        # Essential channels for analysis
-        channels = ['Speed', 'Throttle', 'Brake', 'SteeringWheelAngle', 'LatG', 'LonG', 'ABSActive']
-        for col in channels:
-            if col in df.columns:
-                out[col] = np.interp(grid, df['Dist'], df[col])
-            else:
-                out[col] = 0.0
+        for col in ['Speed', 'Throttle', 'Brake', 'SteeringWheelAngle', 'LatG', 'LonG', 'ABSActive']:
+            if col in df.columns: out[col] = np.interp(grid, df['Dist'], df[col])
+            else: out[col] = 0.0
         return out
         
     res_d = interp_lap(df_d)
     res_b = interp_lap(df_b)
     
-    # Time Delta: sum of (ds / v_driver - ds / v_bench)
-    v_d = np.maximum(res_d['Speed'].values / 3.6, 1.0) # avoid division by zero
+    # Delta Calculation
+    v_d = np.maximum(res_d['Speed'].values / 3.6, 1.0)
     v_b = np.maximum(res_b['Speed'].values / 3.6, 1.0)
     ds = np.diff(grid, prepend=0)
     delta = np.cumsum(ds / v_d - ds / v_b)
     
     return res_d, res_b, grid, delta
 
-# --- 3. PERFORMANCE AUDIT (Driver Coach) ---
+# --- 3. AUDIT RENDERING ---
 
-def render_driver_coach(res_d, res_b, grid):
-    st.header("🧠 Clinical Performance Audit")
+def render_audit(res_d, res_b, grid, delta):
+    st.header("🏁 Driver Performance Audit")
     
-    # Segment by Steering Load
+    # Identify Top 3 Time Thieves
+    delta_slope = np.gradient(delta)
     is_corner = np.abs(res_d['SteeringWheelAngle']) > 15
     events = (is_corner != pd.Series(is_corner).shift()).cumsum()
-    corner_idx = 0
-
+    
+    audit_data = []
     for eid in events.unique():
         idx = events == eid
         if is_corner[idx].iloc[0] and len(res_d[idx]) > 40:
-            corner_idx += 1
-            d_ev = res_d[idx]
+            time_lost = delta[idx.values].max() - delta[idx.values].min()
+            audit_data.append({
+                'id': eid,
+                'idx': idx,
+                'lost': time_lost,
+                'dist': grid[idx].mean()
+            })
+    
+    # Sort by most time lost
+    top_thieves = sorted(audit_data, key=lambda x: x['lost'], reverse=True)[:3]
+    
+    for i, thief in enumerate(top_thieves, 1):
+        d_ev = res_d[thief['idx']]
+        b_ev = res_b[thief['idx']]
+        
+        with st.container():
+            st.subheader(f"Time Thief #{i}: Corner at {thief['dist']:.0f}m")
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Time Lost", f"{thief['lost']:.3f}s")
+            col2.metric("V-Min Deficit", f"{b_ev['Speed'].min() - d_ev['Speed'].min():.1f} km/h")
             
-            # Sawtooth Check (Pedal Stabbing)
+            # --- DIAGNOSTIC LOGIC ---
+            
+            # 1. Entry Phase (Braking)
+            abs_usage = (d_ev['ABSActive'] > 0.5).mean() * 100
+            if abs_usage > 15:
+                st.markdown(f"""<div class="critical-card">
+                    <strong>PHASE: ENTRY | FAULT: ABS SATURATION ({abs_usage:.1f}%)</strong><br>
+                    <strong>ENGINEER NOTE:</strong> You are over-braking while turning. This saturates the front tires and kills rotation.<br>
+                    <strong>ACTION:</strong> Reduce peak brake pressure by 5-10% and release the pedal 2 meters earlier.
+                </div>""", unsafe_allow_html=True)
+            
+            # 2. Mid Phase (Overslowing)
+            d_vmin_dist = grid[d_ev['Speed'].idxmin()]
+            b_vmin_dist = grid[b_ev['Speed'].idxmin()]
+            if (d_vmin_dist - b_vmin_dist) < -3.0:
+                st.markdown(f"""<div class="warning-card">
+                    <strong>PHASE: MID | FAULT: EARLY V-MIN</strong><br>
+                    <strong>ENGINEER NOTE:</strong> You are reaching minimum speed {abs(d_vmin_dist - b_vmin_dist):.1f}m before the apex.<br>
+                    <strong>ACTION:</strong> This is "parking the car." Carry more rolling speed deeper into the corner.
+                </div>""", unsafe_allow_html=True)
+            
+            # 3. Exit Phase (Modulation)
             t_rate = np.abs(np.gradient(d_ev['Throttle']))
             if np.sum(t_rate > 40) > 10:
-                st.markdown(f'<div class="critical-card"><strong>EVENT {corner_idx}: Sawtooth Throttle.</strong> You are stabbing the pedal. This upsets the 992.2 Cup aero platform. Impact: Lost rear traction.</div>', unsafe_allow_html=True)
-            
-            # ABS Check (Rotation Killer)
-            if (d_ev['ABSActive'] > 0.5).any():
-                st.markdown(f'<div class="critical-card"><strong>EVENT {corner_idx}: ABS Saturation.</strong> You are leaning on ABS during turn-in. Impact: Killing front-end rotation.</div>', unsafe_allow_html=True)
+                st.markdown(f"""<div class="critical-card">
+                    <strong>PHASE: EXIT | FAULT: SAWTOOTH THROTTLE</strong><br>
+                    <strong>ENGINEER NOTE:</strong> Erratic throttle stabs detected. You are upsetting the 992.2 aero platform.<br>
+                    <strong>ACTION:</strong> Commit to a single linear squeeze. If you have to lift, your entry line was too shallow.
+                </div>""", unsafe_allow_html=True)
 
-# --- 4. MAIN INTERFACE ---
+# --- 4. MAIN ---
 
 def main():
     apply_custom_css()
-    st.title("🏎️ Race Engineer Pro | Porsche 992.2 Cup")
-    
-    # GitHub Root Directory
-    DATA_DIR = "." 
+    DATA_DIR = "."
     
     with st.sidebar:
-        st.header("Session Config")
-        available_files = [f for f in os.listdir(DATA_DIR) if f.endswith('.csv')]
-        
-        if available_files:
-            available_files.sort()
-            f_d_name = st.selectbox("Driver Lap (Blue)", available_files, index=0)
-            f_b_name = st.selectbox("Benchmark Lap (Red)", available_files, index=min(1, len(available_files)-1))
-        else:
-            st.error("No CSV files found in GitHub root.")
-            return
+        st.header("Diagnostic Settings")
+        setup_mode = st.radio("Series Type", ["Fixed Setup", "Open Setup"])
+        files = [f for f in os.listdir(DATA_DIR) if f.endswith('.csv')]
+        files.sort()
+        d_file = st.selectbox("Your Lap", files, index=0)
+        b_file = st.selectbox("Benchmark Lap", files, index=min(1, len(files)-1))
 
-    if f_d_name and f_b_name:
-        try:
-            df_d = process_telemetry(pd.read_csv(f_d_name))
-            df_b = process_telemetry(pd.read_csv(f_b_name))
-            
-            res_d, res_b, grid, delta = align_and_resample(df_d, df_b)
-            
-            tab1, tab2 = st.tabs(["📊 Telemetry Traces", "🧠 Driver Coach"])
-            
-            with tab1:
-                st.metric("Lap Time Delta", f"{delta[-1]:.3f}s", delta_color="inverse")
-                
-                fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03)
-                
-                # Speed Overlay
-                fig.add_trace(go.Scatter(x=grid, y=res_b['Speed'], name="Benchmark", line=dict(color='red', width=1)), row=1, col=1)
-                fig.add_trace(go.Scatter(x=grid, y=res_d['Speed'], name="Driver", line=dict(color='cyan', width=2)), row=1, col=1)
-                
-                # Input Modulation
-                fig.add_trace(go.Scatter(x=grid, y=res_d['Throttle'], name="Throttle", line=dict(color='green')), row=2, col=1)
-                fig.add_trace(go.Scatter(x=grid, y=res_d['Brake'], name="Brake", line=dict(color='orange')), row=2, col=1)
-                
-                # Steering Load
-                fig.add_trace(go.Scatter(x=grid, y=res_d['SteeringWheelAngle'], name="Steer", line=dict(color='white')), row=3, col=1)
-                
-                # Time Delta
-                fig.add_trace(go.Scatter(x=grid, y=delta, name="Delta", fill='tozeroy', line=dict(color='yellow')), row=4, col=1)
-                
-                fig.update_layout(height=1000, template="plotly_dark", showlegend=False, hovermode="x unified")
-                st.plotly_chart(fig, use_container_width=True)
-                
-            with tab2:
-                render_driver_coach(res_d, res_b, grid)
-                
-        except Exception as e:
-            st.error(f"Engineering Logic Failure: {e}")
-            # If it fails, print headers to help us diagnose
-            st.write("Headers found in your file:", list(pd.read_csv(f_d_name).columns))
+    if d_file and b_file:
+        df_d = process_telemetry(pd.read_csv(d_file))
+        df_b = process_telemetry(pd.read_csv(b_file))
+        res_d, res_b, grid, delta = analyze_performance(df_d, df_b)
+        
+        render_audit(res_d, res_b, grid, delta)
+        
+        st.divider()
+        st.header("🔧 Mechanical Adjustments")
+        if setup_mode == "Fixed Setup":
+            st.info("CONSTRAINT: Fixed Setup. Recommendations limited to Brake Bias.")
+            abs_total = (res_d['ABSActive'] > 0.5).mean() * 100
+            if abs_total > 10:
+                st.success(f"ADJUSTMENT: Move Brake Bias BACKWARD (try 53.2% or 52.8%) to reduce front-end ABS saturation.")
+        else:
+            st.info("CONSTRAINT: Open Setup. Suggesting aero/spring changes.")
+            # Add open setup logic here
 
 if __name__ == "__main__":
     main()
