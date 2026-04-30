@@ -19,7 +19,7 @@ TRACK_DB = {
     "Watkins Glen (Boot)": 5450
 }
 
-# Initialize Session State
+# Initialize Session State for Garage
 if 'current_setup' not in st.session_state:
     st.session_state.current_setup = {
         "Brake Bias": 50.0, "Front ARB": 5, "Rear ARB": 3, 
@@ -78,11 +78,12 @@ def align_and_resample(df_d, df_b, points=5000):
     
     def interp_lap(df):
         out = pd.DataFrame({'LapDist': grid_meters})
-        # Linear for continuous
+        # Linear Interpolation for Continuous Channels
         cont = ['Speed', 'Throttle', 'Brake', 'SteeringWheelAngle', 'LatG', 'LonG', 'GSum', 'RPM', 'Lat', 'Lon', 'ABSActive', 'TCActive']
         for col in cont:
             if col in df.columns: out[col] = np.interp(grid_meters, df['LapDist'], df[col])
-        # Discrete for Gear (Zero-Order Hold)
+        
+        # Zero-Order Hold for Discrete Channels (Gear)
         if 'Gear' in df.columns:
             idx = np.searchsorted(df['LapDist'], grid_meters, side='right') - 1
             out['Gear'] = df['Gear'].iloc[np.clip(idx, 0, len(df)-1)].values
@@ -94,12 +95,12 @@ def align_and_resample(df_d, df_b, points=5000):
     return res_d, res_b, grid_meters
 
 def calculate_physics(res_d, res_b, grid_m):
-    # Time Delta
+    # Time Delta (dt = ds / v)
     v_d, v_b = np.maximum(res_d['Speed'].values / 3.6, 1.0), np.maximum(res_b['Speed'].values / 3.6, 1.0)
     delta = np.cumsum(np.diff(grid_m, prepend=0) / v_d - np.diff(grid_m, prepend=0) / v_b)
     delta = delta - delta[0]
     
-    # Signed Line Distance (Cross Product)
+    # Signed Line Distance (Cross Product for Left/Right)
     tx, ty = np.gradient(res_b['Lon']), np.gradient(res_b['Lat'])
     ux, uy = res_d['Lon'] - res_b['Lon'], res_d['Lat'] - res_b['Lat']
     direction = np.sign(tx * uy - ty * ux)
@@ -116,13 +117,19 @@ def render_analyze_laps(res_d, res_b, grid_m, delta, line_dist):
     
     # Helper for dual traces
     def add_dual(row, col, is_step=False):
-        fig.add_trace(go.Scatter(x=grid_m, y=res_b[col], line=dict(color=c_b, width=1), shape='hv' if is_step else None), row=row, col=1)
-        fig.add_trace(go.Scatter(x=grid_m, y=res_d[col], line=dict(color=c_d, width=1.8), shape='hv' if is_step else None), row=row, col=1)
+        # Benchmark (Solid Red)
+        fig.add_trace(go.Scatter(x=grid_m, y=res_b[col], 
+                                 line=dict(color=c_b, width=1, shape='hv' if is_step else None), 
+                                 name="Bench"), row=row, col=1)
+        # Driver (Solid Blue)
+        fig.add_trace(go.Scatter(x=grid_m, y=res_d[col], 
+                                 line=dict(color=c_d, width=1.8, shape='hv' if is_step else None), 
+                                 name="Driver"), row=row, col=1)
 
     add_dual(1, 'Speed'); add_dual(2, 'Throttle'); add_dual(3, 'Brake')
-    add_dual(4, 'Gear', True); add_dual(5, 'RPM'); add_dual(6, 'SteeringSmooth')
+    add_dual(4, 'Gear', is_step=True); add_dual(5, 'RPM'); add_dual(6, 'SteeringSmooth')
     
-    # Line Distance (G61 Style)
+    # Line Distance (G61 Style Signed Deviation)
     fig.add_hline(y=0, line_color=c_b, line_width=1, row=7, col=1)
     fig.add_trace(go.Scatter(x=grid_m, y=line_dist, line=dict(color=c_d, width=1.5)), row=7, col=1)
     
@@ -153,16 +160,19 @@ def render_setup_tweaker(res_d, issue, setup_type):
     
     if setup_type == "Fixed":
         st.warning("Fixed Setup: Mechanicals locked. Adjust Brake Bias or Electronic Maps.")
-        abs_duty = (res_d[res_d['Brake']>5]['ABSActive'] > 0.5).mean()
-        if abs_duty > 0.5:
-            st.error(f"Suggestion: Move Brake Bias Forward. Current: {curr['Brake Bias']}% -> Target: {curr['Brake Bias']+0.5}%")
+        braking = res_d[res_d['Brake']>5]
+        if not braking.empty:
+            abs_duty = (braking['ABSActive'] > 0.5).mean()
+            if abs_duty > 0.5:
+                st.error(f"Suggestion: Move Brake Bias Forward. Current: {curr['Brake Bias']}% -> Target: {curr['Brake Bias']+0.5}%")
         return
 
-    # Open Setup: Signature Check
+    # Open Setup: Balance Signature Check
     mask = (res_d['Speed'] > 60) & (res_d['Brake'] < 5)
     sig = res_d[mask]
-    fig = px.scatter(sig, x=sig['LatG'].abs(), y=sig['SteeringSmooth'].abs(), color='Speed', template="plotly_dark", title="Balance Signature")
-    st.plotly_chart(fig, use_container_width=True)
+    if not sig.empty:
+        fig = px.scatter(sig, x=sig['LatG'].abs(), y=sig['SteeringSmooth'].abs(), color='Speed', template="plotly_dark", title="Balance Signature")
+        st.plotly_chart(fig, use_container_width=True)
     
     if issue == "Mid-Corner Understeer":
         st.markdown(f'<div class="setup-card"><strong>Recommendation:</strong> Soften Front ARB (Current: {curr["Front ARB"]} -> Target: {curr["Front ARB"]-1})</div>', unsafe_allow_html=True)
