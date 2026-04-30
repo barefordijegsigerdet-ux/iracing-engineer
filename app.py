@@ -4,7 +4,7 @@ import numpy as np
 import os
 
 # --- 1. SYSTEM CONFIGURATION ---
-st.set_page_config(page_title="Race Engineer Pro v3.3", layout="wide")
+st.set_page_config(page_title="Race Engineer Pro v3.3.1", layout="wide")
 
 def apply_custom_css():
     st.markdown("""
@@ -13,7 +13,7 @@ def apply_custom_css():
         .stMetric { background-color: #161b22; border: 1px solid #30363d; padding: 15px; border-radius: 8px; }
         .critical-card { background-color: #2d1b1e; border-left: 10px solid #ff3344; padding: 20px; margin-bottom: 15px; border-radius: 4px; }
         .warning-card { background-color: #2d261b; border-left: 10px solid #ffcc00; padding: 20px; margin-bottom: 15px; border-radius: 4px; }
-        .success-card { background-color: #1b2d1e; border-left: 100px solid #00ff88; padding: 20px; margin-bottom: 15px; border-radius: 4px; }
+        .success-card { background-color: #1b2d1e; border-left: 10px solid #00ff88; padding: 20px; margin-bottom: 15px; border-radius: 4px; }
         </style>
     """, unsafe_allow_html=True)
 
@@ -21,44 +21,43 @@ def apply_custom_css():
 def find_col(df, keywords):
     for k in keywords:
         for c in df.columns:
-            if k.lower() in c.lower(): return c
+            if k.lower() in str(c).lower(): return c
     return None
 
-# --- 3. INGESTION ENGINE (HIGH TOLERANCE) ---
+# --- 3. INGESTION ENGINE ---
 def process_telemetry(df):
-    df.columns = [c.strip() for c in df.columns]
+    df.columns = [str(c).strip() for c in df.columns]
     new_df = pd.DataFrame()
     
     # Distance
-    c_dist = find_col(df, ['dist', 'mous', 'pos'])
+    c_dist = find_col(df, ['dist', 'mous', 'pos', 'track'])
     new_df['Dist'] = pd.to_numeric(df[c_dist], errors='coerce').fillna(0) if c_dist else np.arange(len(df))
     
-    # Speed (Convert to km/h)
-    c_spd = find_col(df, ['speed', 'vel', 'v_'])
+    # Speed (Convert to km/h if needed)
+    c_spd = find_col(df, ['speed', 'vel', 'v_', 'gps_speed'])
     if c_spd:
         spd = pd.to_numeric(df[c_spd], errors='coerce').fillna(0)
-        new_df['Speed'] = spd * 3.6 if spd.max() < 100 else spd
+        new_df['Speed'] = spd * 3.6 if spd.max() < 90 else spd
     else:
         new_df['Speed'] = 0
 
-    # Steering (Degrees)
+    # Steering
     c_str = find_col(df, ['steer', 'wheel', 'angle', 'str'])
     if c_str:
         str_val = pd.to_numeric(df[c_str], errors='coerce').fillna(0)
-        new_df['Steer'] = str_val * (180/np.pi) if str_val.abs().max() < 10 else str_val
+        new_df['Steer'] = str_val * (180/np.pi) if str_val.abs().max() < 15 else str_val
     else:
         new_df['Steer'] = 0
 
-    # G-Forces
-    c_lat = find_col(df, ['lat', 'g_x'])
-    c_lon = find_col(df, ['lon', 'g_y', 'accel'])
+    # G-Forces (Detect and Normalize)
+    c_lat = find_col(df, ['lat', 'g_x', 'accel_x'])
+    c_lon = find_col(df, ['lon', 'g_y', 'accel_y'])
     new_df['LatG'] = pd.to_numeric(df[c_lat], errors='coerce').fillna(0) if c_lat else 0
     new_df['LonG'] = pd.to_numeric(df[c_lon], errors='coerce').fillna(0) if c_lon else 0
-    # Normalize if in m/s^2
     if new_df['LatG'].abs().max() > 5: new_df['LatG'] /= 9.81
     if new_df['LonG'].abs().max() > 5: new_df['LonG'] /= 9.81
 
-    # Throttle/Brake
+    # Inputs
     c_thr = find_col(df, ['throt', 'gas', 'accel_p'])
     c_brk = find_col(df, ['brake', 'brk', 'press'])
     new_df['Throttle'] = pd.to_numeric(df[c_thr], errors='coerce').fillna(0) if c_thr else 0
@@ -68,8 +67,14 @@ def process_telemetry(df):
 
 # --- 4. AUDIT ENGINE ---
 def render_audit(df_d, df_b):
-    # Interpolation to match distances
-    max_dist = min(df_d['Dist'].max(), df_b['Dist'].max())
+    # Ensure non-zero distance for interpolation
+    max_d = df_d['Dist'].max()
+    max_b = df_b['Dist'].max()
+    if max_d <= 0 or max_b <= 0:
+        st.error("Data error: Distance values are zero.")
+        return
+
+    max_dist = min(max_d, max_b)
     grid = np.linspace(0, max_dist, 2000)
     
     def sync(df):
@@ -83,61 +88,76 @@ def render_audit(df_d, df_b):
     
     d, b = sync(df_d), sync(df_b)
     
-    # Delta
-    v_d, v_b = np.maximum(d['Speed']/3.6, 1.0), np.maximum(b['Speed']/3.6, 1.0)
-    delta = np.cumsum(np.diff(grid, prepend=0)/v_d - np.diff(grid, prepend=0)/v_b)
+    # Delta Calculation (Force to Numpy array to fix the KeyError -1)
+    v_d_ms = np.maximum(d['Speed'].values / 3.6, 1.0)
+    v_b_ms = np.maximum(b['Speed'].values / 3.6, 1.0)
     
-    st.metric("Total Lap Delta", f"{delta[-1]:.3f}s", delta_color="inverse")
+    dist_steps = np.diff(grid, prepend=0)
+    delta_array = np.cumsum(dist_steps / v_d_ms - dist_steps / v_b_ms)
+    
+    # UI Display
+    st.metric("Total Lap Delta", f"{delta_array[-1]:.3f}s", delta_color="inverse")
     st.header("🏁 Universal Engineering Audit")
 
-    # DETECT EVENTS (Steering > 5 deg, length > 20m)
-    d['SteerSmooth'] = d['Steer'].rolling(window=20, center=True).mean().fillna(0)
-    is_corner = d['SteerSmooth'].abs() > 5
+    # Corner Detection Logic
+    d['SteerSmooth'] = d['Steer'].rolling(window=30, center=True).mean().fillna(0)
+    is_corner = d['SteerSmooth'].abs() > 8
     events = (is_corner != is_corner.shift()).cumsum()
     
     found_events = 0
     for eid in events.unique():
         idx = events == eid
-        if not is_corner[idx].iloc[0] or (grid[idx][-1] - grid[idx][0] < 20): continue
+        if not is_corner[idx].iloc[0]: continue
+        
+        # Check spatial length (ignore noise under 30m)
+        if (grid[idx][-1] - grid[idx][0]) < 30: continue
         
         found_events += 1
         with st.expander(f"📍 Event {found_events} | Apex at {grid[idx].mean():.0f}m", expanded=True):
+            # Speed & Util Math
             v_delta = d[idx]['Speed'].min() - b[idx]['Speed'].min()
-            util = min((np.sqrt(d[idx]['LatG']**2 + d[idx]['LonG']**2).max() / 1.8) * 100, 100.0)
+            combined_g = np.sqrt(d[idx]['LatG']**2 + d[idx]['LonG']**2).max()
+            util = min((combined_g / 1.8) * 100, 100.0)
             
             c1, c2 = st.columns([2,1])
             c2.metric("Tire Util.", f"{util:.1f}%")
             c2.metric("V-Min Delta", f"{v_delta:.1f} km/h")
             
-            if v_delta < -1.0:
-                c1.markdown('<div class="critical-card"><strong>LOW APEX SPEED.</strong> You are over-slowing. Release brake earlier.</div>', unsafe_allow_html=True)
+            if v_delta < -0.8:
+                c1.markdown('<div class="critical-card"><strong>LOW APEX SPEED.</strong> You are over-slowing the car. Carry 1-2 km/h more entry speed.</div>', unsafe_allow_html=True)
+            elif util < 85:
+                c1.markdown('<div class="warning-card"><strong>UNDER-UTILIZED.</strong> You have more grip available. Push the limit harder.</div>', unsafe_allow_html=True)
             else:
-                c1.markdown('<div class="success-card"><strong>GOOD PACE.</strong> Speed is maintained through apex.</div>', unsafe_allow_html=True)
+                c1.markdown('<div class="success-card"><strong>EXCELLENT PHASE.</strong> Minimal time loss. Optimize line to gain more.</div>', unsafe_allow_html=True)
 
     if found_events == 0:
-        st.warning("⚠️ No distinct corners detected. Showing full lap aggregate data below.")
-        st.metric("Avg Speed Delta", f"{d['Speed'].mean() - b['Speed'].mean():.1f} km/h")
+        st.info("💡 No corners detected. Check if Steering column is present or increase steering input.")
 
-# --- 5. APP MAIN ---
+# --- 5. MAIN ---
 def main():
     apply_custom_css()
-    files = [f for f in os.listdir('.') if f.endswith('.csv')]
+    # List files in current directory
+    all_files = [f for f in os.listdir('.') if f.endswith('.csv')]
     
+    if not all_files:
+        st.warning("No CSV files found in directory. Please upload telemetry.")
+        return
+
     with st.sidebar:
-        st.title("🛠️ Settings")
-        if len(files) < 2:
-            st.error("Please upload at least 2 CSV files.")
-            return
-        d_name = st.selectbox("Driver Lap", files, index=0)
-        b_name = st.selectbox("Benchmark Lap", files, index=1)
+        st.title("🛠️ Analysis Config")
+        d_name = st.selectbox("Driver Lap (Comparison)", all_files, index=0)
+        b_name = st.selectbox("Benchmark Lap (Baseline)", all_files, index=min(1, len(all_files)-1))
         
         if d_name == b_name:
-            st.error("Select two different files!")
+            st.error("Please select two different files to see a delta.")
             st.stop()
 
-    df_d = process_telemetry(pd.read_csv(d_name))
-    df_b = process_telemetry(pd.read_csv(b_name))
-    render_audit(df_d, df_b)
+    try:
+        df_d = process_telemetry(pd.read_csv(d_name))
+        df_b = process_telemetry(pd.read_csv(b_name))
+        render_audit(df_d, df_b)
+    except Exception as e:
+        st.error(f"Failed to process telemetry: {e}")
 
 if __name__ == "__main__":
     main()
