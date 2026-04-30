@@ -793,12 +793,8 @@ Give me:
 Keep it direct. No bullet-point overload. Talk to them like a coach in a garage, not a textbook.
 """
 
-        with st.spinner("Analysing your session..."):
-            # FIX 3 — Model initialised inside button click only.
-            # Initialising at module level causes NotFound on Streamlit Cloud
-            # because the API call fires before secrets are fully resolved
-            # on cold start. Lazy init inside the button click is safe.
-           _model = genai.GenerativeModel("gemini-2.0-flash")
+                with st.spinner("Analysing your session..."):
+            _model = genai.GenerativeModel("gemini-2.0-flash")
             response = _model.generate_content(prompt)
             st.markdown("### Your Coaching Brief")
             st.markdown(response.text)
