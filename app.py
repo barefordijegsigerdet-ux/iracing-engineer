@@ -1001,35 +1001,169 @@ Keep it short and direct.
 # ══════════════════════════════════════════════════════════════════════════════
 def tab_garage():
     st.header("Garage Advisor")
-    st.markdown("""
-    <div class="coming-soon">
-        <h3>🔧 Coming Soon</h3>
-        <p>Upload your setup and describe what's feeling wrong —
-        the engineer tells you exactly what to adjust.</p>
-        <p>HTML setup upload and manual input both supported.</p>
-    </div>
-    """, unsafe_allow_html=True)
+    st.caption("Tell the engineer what's wrong. Get told exactly what to adjust.")
 
-    st.markdown("---")
-    st.markdown("**Preview — Manual Input (not yet active)**")
     col1, col2 = st.columns(2)
     with col1:
-        st.text_input("Car",          placeholder="Porsche 992.2 GT3 Cup", disabled=True)
-        st.text_input("Track",        placeholder="Zandvoort GP",          disabled=True)
-        st.slider("TC Level (1–10)",  1, 10, 5,                            disabled=True)
-        st.slider("ABS Setting",      1, 10, 5,                            disabled=True)
-        st.number_input("Brake Bias",                                       disabled=True)
+        car_garage   = st.selectbox("Car", CARS, key="garage_car")
+        if car_garage == "Other (type below)":
+            car_garage = st.text_input("Car name", key="garage_car_custom")
     with col2:
-        st.number_input("Ride Height Front (mm)", disabled=True)
-        st.number_input("Ride Height Rear (mm)",  disabled=True)
-        st.number_input("Tyre Pressure FL (psi)", disabled=True)
-        st.number_input("Tyre Pressure FR (psi)", disabled=True)
-    st.text_area(
-        "What's feeling wrong?",
-        placeholder="e.g. The rear is snapping on exit of slow corners...",
-        disabled=True
+        track_garage = st.selectbox("Track", list(TRACKS.keys()), key="garage_track")
+        if track_garage == "Other (type below)":
+            track_garage = st.text_input("Track name", key="garage_track_custom")
+
+    st.markdown("---")
+    section_header("Setup Values")
+    st.caption("Fill in what you know. Leave anything blank if you haven't changed it.")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.markdown("**Aero**")
+        front_wing  = st.number_input("Front Wing",          min_value=0,   max_value=100, value=0,  step=1,   key="fw")
+        rear_wing   = st.number_input("Rear Wing",           min_value=0,   max_value=100, value=0,  step=1,   key="rw")
+
+        st.markdown("**Brakes**")
+        brake_bias  = st.number_input("Brake Bias (%)",      min_value=40.0, max_value=70.0, value=55.0, step=0.1, key="bb")
+        abs_setting = st.slider("ABS Setting",               1, 10, 5, key="abs_s")
+        tc_setting  = st.slider("TC Level",                  1, 10, 5, key="tc_s")
+
+    with col2:
+        st.markdown("**Ride Height (mm)**")
+        rh_front    = st.number_input("Ride Height Front",   min_value=0,   max_value=200, value=60, step=1,   key="rhf")
+        rh_rear     = st.number_input("Ride Height Rear",    min_value=0,   max_value=200, value=80, step=1,   key="rhr")
+
+        st.markdown("**Springs (N/mm)**")
+        spring_f    = st.number_input("Spring Rate Front",   min_value=0,   max_value=500, value=120, step=5,  key="spf")
+        spring_r    = st.number_input("Spring Rate Rear",    min_value=0,   max_value=500, value=140, step=5,  key="spr")
+
+        st.markdown("**ARB**")
+        arb_front   = st.slider("ARB Front",                 1, 10, 5, key="arbf")
+        arb_rear    = st.slider("ARB Rear",                  1, 10, 5, key="arbr")
+
+    with col3:
+        st.markdown("**Tyre Pressures (psi)**")
+        tp_fl       = st.number_input("Tyre Pressure FL",    min_value=20.0, max_value=40.0, value=29.0, step=0.1, key="tpfl")
+        tp_fr       = st.number_input("Tyre Pressure FR",    min_value=20.0, max_value=40.0, value=29.0, step=0.1, key="tpfr")
+        tp_rl       = st.number_input("Tyre Pressure RL",    min_value=20.0, max_value=40.0, value=30.0, step=0.1, key="tprl")
+        tp_rr       = st.number_input("Tyre Pressure RR",    min_value=20.0, max_value=40.0, value=30.0, step=0.1, key="tprr")
+
+        st.markdown("**Dampers**")
+        bump_f      = st.slider("Bump Front",                1, 20, 10, key="bmpf")
+        bump_r      = st.slider("Bump Rear",                 1, 20, 10, key="bmpr")
+        rebound_f   = st.slider("Rebound Front",             1, 20, 10, key="rbdf")
+        rebound_r   = st.slider("Rebound Rear",              1, 20, 10, key="rbdr")
+
+    st.markdown("---")
+    section_header("What's Feeling Wrong?")
+
+    # Common complaints as quick-select chips
+    st.caption("Pick any that apply — then describe it in your own words below.")
+
+    complaints = [
+        "Understeer on entry",
+        "Understeer mid-corner",
+        "Oversteer on entry",
+        "Rear snaps on exit",
+        "Car nervous over kerbs",
+        "Loose under braking",
+        "Bouncing/bottoming out",
+        "Understeer on exit",
+        "Front washes wide on exit",
+        "Car feels generally slow",
+    ]
+
+    selected_complaints = []
+    cols = st.columns(2)
+    for i, complaint in enumerate(complaints):
+        if cols[i % 2].checkbox(complaint, key=f"complaint_{i}"):
+            selected_complaints.append(complaint)
+
+    custom_complaint = st.text_area(
+        "Describe it in your own words (optional)",
+        placeholder="e.g. At T3 on the way out the rear steps out suddenly when I get back on the throttle. "
+                    "It's not gradual, it just snaps. Happens more when the tyres are cold.",
+        height=100
     )
-    st.button("Ask the Engineer", disabled=True)
+
+    session_context = st.text_area(
+        "Any other context? (optional)",
+        placeholder="e.g. This is a sprint race setup, tyres were overheating after 10 laps, "
+                    "track was damp at the start...",
+        height=80
+    )
+
+    st.markdown("---")
+
+    if not selected_complaints and not custom_complaint:
+        st.info("Select at least one complaint or describe what's wrong above.")
+        return
+
+    if st.button("Ask the Engineer", type="primary", key="garage_submit"):
+
+        # Build setup summary
+        setup_summary = f"""
+Car: {car_garage}
+Track: {track_garage}
+
+Setup:
+- Front Wing: {front_wing} | Rear Wing: {rear_wing}
+- Brake Bias: {brake_bias}% | ABS: {abs_setting} | TC: {tc_setting}
+- Ride Height: Front {rh_front}mm / Rear {rh_rear}mm
+- Springs: Front {spring_f} N/mm / Rear {spring_r} N/mm
+- ARB: Front {arb_front} / Rear {arb_rear}
+- Tyre Pressures: FL {tp_fl} / FR {tp_fr} / RL {tp_rl} / RR {tp_rr} psi
+- Dampers Bump: Front {bump_f} / Rear {bump_r}
+- Dampers Rebound: Front {rebound_f} / Rear {rebound_r}
+"""
+
+        complaints_summary = ""
+        if selected_complaints:
+            complaints_summary += "Selected issues: " + ", ".join(selected_complaints) + "\n"
+        if custom_complaint:
+            complaints_summary += f"Driver description: {custom_complaint}\n"
+        if session_context:
+            complaints_summary += f"Context: {session_context}\n"
+
+        prompt = f"""
+You are an experienced GT3 race engineer. You speak directly and practically.
+No jargon the driver won't understand. No waffle. Talk like you're leaning on the pitwall.
+
+Here is the car setup and what the driver is feeling:
+
+{setup_summary}
+
+Driver complaints:
+{complaints_summary}
+
+Give me:
+1. What is physically causing this feeling — one short paragraph, plain English
+2. Exactly what to change in the setup — specific values or directions (e.g. "soften front ARB 2 clicks", "move brake bias 1% rearward"). Be specific.
+3. If it could also be a driving issue rather than a setup issue, say so directly and what to try first
+4. One thing to check or test on the next run to confirm the fix worked
+
+Be direct. Prioritise the most impactful change first. If the setup looks fine for the complaint, say so and point to driving technique instead.
+"""
+
+        with st.spinner("Engineer is looking at it..."):
+            for attempt in range(3):
+                try:
+                    _model   = genai.GenerativeModel("gemini-2.0-flash")
+                    response = _model.generate_content(prompt)
+                    st.markdown("### Engineer's Notes")
+                    st.markdown(response.text)
+                    break
+                except Exception as e:
+                    if "ResourceExhausted" in str(type(e).__name__) and attempt < 2:
+                        import time
+                        st.warning(f"API quota hit — retrying in 15s... ({attempt + 1}/3)")
+                        time.sleep(15)
+                    else:
+                        st.error(
+                            "Quota limit reached. Wait a minute and try again."
+                        )
+                        break
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN
