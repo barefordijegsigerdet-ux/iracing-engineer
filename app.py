@@ -10,7 +10,7 @@ def apply_custom_css():
     st.markdown("""
         <style>
         .main { background-color: #0e1117; color: #e0e0e0; }
-        .stMetric { background-color: #161b22; border: 1px solid #30363d; padding: 15px; border-radius: 8px; }
+        .stMetric { background-color: #161b22; border: 1px solid #30363d; padding: 15px; border-radius: 8px; border: 1px solid #30363d; }
         .critical-card { background-color: #2d1b1e; border-left: 10px solid #ff3344; padding: 20px; margin-bottom: 15px; border-radius: 4px; border: 1px solid #4d1b1e; }
         .warning-card { background-color: #2d261b; border-left: 10px solid #ffcc00; padding: 20px; margin-bottom: 15px; border-radius: 4px; border: 1px solid #4d401b; }
         .success-card { background-color: #1b2d1e; border-left: 10px solid #00ff88; padding: 20px; margin-bottom: 15px; border-radius: 4px; border: 1px solid #1b4d24; }
@@ -47,16 +47,19 @@ def process_telemetry(df):
     df['Dist'] = pd.to_numeric(df[dist_cols[0]], errors='coerce').fillna(0)
     
     # 2. Acceleration Normalization (Logic Fix 3: G-Scale Check)
-    # Check if data is already in Gs or m/s² by checking max value
     for col in ['LatAccel', 'LongAccel', 'LonAccel']:
         if col in df.columns:
             vals = pd.to_numeric(df[col], errors='coerce').fillna(0)
-            # If max absolute value > 5.0, it's likely m/s² and needs normalization to G
+            # If values look like m/s2 (abs max > 5), convert to G
             if vals.abs().max() > 5.0:
                 df[col.replace('Accel', 'G')] = vals / 9.81
             else:
                 df[col.replace('Accel', 'G')] = vals
     
+    # Ensure columns exist even if not in CSV
+    if 'LatG' not in df.columns: df['LatG'] = 0.0
+    if 'LonG' not in df.columns: df['LonG'] = 0.0
+
     # 3. Steering Normalization (Radians to Degrees Fix)
     if 'SteeringWheelAngle' in df.columns:
         df['SteerDeg'] = pd.to_numeric(df['SteeringWheelAngle'], errors='coerce') * (180 / np.pi)
@@ -79,7 +82,6 @@ def analyze_laps(df_d, df_b):
     
     def interp(df):
         out = pd.DataFrame({'Dist': grid})
-        # Note: Ensure G names match normalized names from process_telemetry
         cols = ['Speed', 'Throttle', 'Brake', 'SteerDeg', 'LatG', 'LonG', 'ABSActive']
         for col in cols:
             if col in df.columns: out[col] = np.interp(grid, df['Dist'], df[col])
@@ -89,7 +91,6 @@ def analyze_laps(df_d, df_b):
     res_d = interp(df_d)
     res_b = interp(df_b)
     
-    # Delta Calc
     v_d, v_b = np.maximum(res_d['Speed'].values / 3.6, 1.0), np.maximum(res_b['Speed'].values / 3.6, 1.0)
     delta = np.cumsum(np.diff(grid, prepend=0) / v_d - np.diff(grid, prepend=0) / v_b)
     
@@ -101,20 +102,24 @@ def render_audit(res_d, res_b, grid, delta, profile):
     st.header("🏁 Universal Engineering Audit")
     st.caption(f"Strategy: {profile['focus']}")
     
-    # Logic Fix 2: Rolling Mean (Window 50) to SteerDeg to kill noise
-    steer_smoothed = res_d['SteerDeg'].rolling(window=50, center=True, min_periods=1).mean()
+    # Logic Fix 2: Rolling Mean (50 samples) to kill steering noise
+    steer_filt = res_d['SteerDeg'].rolling(window=50, center=True, min_periods=1).mean()
     
-    is_corner = np.abs(steer_smoothed) > 15
+    is_corner = np.abs(steer_filt) > 15
     events = (is_corner != pd.Series(is_corner).shift()).cumsum()
     
+    found_any = False
     audit_count = 0
     for eid in events.unique():
         idx = events == eid
         
         # Logic Fix 2: Minimum Event Length (50 meters)
-        event_dist = grid[idx][-1] - grid[idx][0]
+        start_dist = grid[idx][0]
+        end_dist = grid[idx][-1]
+        dist_len = end_dist - start_dist
         
-        if is_corner[idx].iloc[0] and event_dist >= 50.0:
+        if is_corner[idx].iloc[0] and dist_len > 50.0:
+            found_any = True
             audit_count += 1
             d_ev, b_ev = res_d[idx], res_b[idx]
             
@@ -122,34 +127,36 @@ def render_audit(res_d, res_b, grid, delta, profile):
             entry_abs = (d_ev['ABSActive'] > profile['abs_threshold']).any()
             exit_saw = np.abs(np.gradient(d_ev['Throttle'])).max() > 45
             
-            # Logic Fix 3: Tire Utilization Cap at 100%
+            # Logic Fix 3: Tire Utilization Normalization (Cap 100%)
             raw_util = (np.sqrt(d_ev['LatG']**2 + d_ev['LonG']**2).max() / profile['friction_limit']) * 100
             util = min(raw_util, 100.0)
             
-            # Logic Fix 4: V-Min Displacement Check (Ignore < 0.5 km/h)
-            vmin_delta = d_ev['Speed'].min() - b_ev['Speed'].min()
-            if abs(vmin_delta) < 0.5:
-                vmin_delta = 0.0
+            # Logic Fix 4: V-Min 0.5 km/h threshold
+            v_min_d = d_ev['Speed'].min()
+            v_min_b = b_ev['Speed'].min()
+            vmin_delta = v_min_d - v_min_b
+            if abs(vmin_delta) < 0.5: vmin_delta = 0.0
             
             with st.expander(f"📍 Event {audit_count} | Apex at {grid[idx].mean():.0f}m", expanded=True):
                 c1, c2 = st.columns([2, 1])
-                
                 with c2:
                     st.metric("Tire Util.", f"{util:.1f}%")
                     st.metric("V-Min Delta", f"{vmin_delta:.1f} km/h")
                 
                 with c1:
-                    # ROOT CAUSE ENGINE
                     if entry_abs and exit_saw:
-                        st.markdown('<div class="critical-card"><strong>ROOT CAUSE: ENTRY INSTABILITY.</strong> You over-braked and saturated the assists. This ruined your mid-corner platform, forcing the sawtooth throttle on exit. <strong>Action: Fix entry first.</strong></div>', unsafe_allow_html=True)
+                        st.markdown('<div class="critical-card"><strong>ROOT CAUSE: ENTRY INSTABILITY.</strong> Over-braked/Saturated assists. This ruined mid-corner platform.</div>', unsafe_allow_html=True)
                     elif entry_abs:
-                        st.markdown('<div class="warning-card"><strong>ENTRY FAULT: ABS OVER-RELIANCE.</strong> Assist is fighting for longitudinal grip while you need lateral rotation. <strong>Action: Squeeze less peak pressure.</strong></div>', unsafe_allow_html=True)
+                        st.markdown('<div class="warning-card"><strong>ENTRY FAULT: ABS OVER-RELIANCE.</strong> Squeeze less peak pressure for better rotation.</div>', unsafe_allow_html=True)
                     elif exit_saw:
-                        st.markdown('<div class="critical-card"><strong>EXIT FAULT: SAWTOOTH THROTTLE.</strong> Entry was clean but platform was unstable. <strong>Action: Hold a steady maintenance throttle.</strong></div>', unsafe_allow_html=True)
+                        st.markdown('<div class="critical-card"><strong>EXIT FAULT: SAWTOOTH THROTTLE.</strong> Hold a steady maintenance throttle.</div>', unsafe_allow_html=True)
                     elif abs(vmin_delta) < 0.5:
-                        st.markdown('<div class="success-card"><strong>CLEAN EXECUTION.</strong> Inputs are efficient and speeds are identical to benchmark. Line optimization is the only path for more time.</div>', unsafe_allow_html=True)
+                        st.markdown('<div class="success-card"><strong>IDENTICAL PERFORMANCE.</strong> V-Min delta is negligible. Focus on line geometry.</div>', unsafe_allow_html=True)
                     else:
-                        st.markdown('<div class="success-card"><strong>EFFICIENT INPUTS.</strong> Inputs are clean. Focus on earlier apex or higher entry speed to close the V-Min delta.</div>', unsafe_allow_html=True)
+                        st.markdown('<div class="success-card"><strong>CLEAN INPUTS.</strong> Time loss is likely purely speed-carrying capacity.</div>', unsafe_allow_html=True)
+
+    if not found_any:
+        st.info("No significant cornering events (>50m) detected with current steering thresholds.")
 
 # --- 5. MAIN ---
 
@@ -165,25 +172,26 @@ def main():
         files = [f for f in os.listdir(DATA_DIR) if f.endswith('.csv')]
         files.sort()
         
-        d_file = st.selectbox("Driver Lap", files, index=0)
-        b_file = st.selectbox("Benchmark Lap", files, index=min(1, len(files)-1))
+        d_file = st.selectbox("Driver Lap (Comparison)", files, index=0)
+        b_file = st.selectbox("Benchmark Lap (Baseline)", files, index=min(1, len(files)-1))
 
         # Logic Fix 1: Force File Uniqueness
         if d_file == b_file:
-            st.warning("⚠️ SELECT DIFFERENT LAPS FOR COMPARISON.")
+            st.error("🚨 SELECT DIFFERENT LAPS FOR COMPARISON.")
             st.stop()
 
     if d_file and b_file:
-        df_d = process_telemetry(pd.read_csv(os.path.join(DATA_DIR, d_file)))
-        df_b = process_telemetry(pd.read_csv(os.path.join(DATA_DIR, b_file)))
-        res_d, res_b, grid, delta = analyze_laps(df_d, df_b)
-        
-        # Display Global Metric
-        st.metric("Total Lap Delta", f"{delta[-1]:.3f}s", delta_color="inverse")
-        
-        render_audit(res_d, res_b, grid, delta, profile)
+        try:
+            df_d = process_telemetry(pd.read_csv(os.path.join(DATA_DIR, d_file)))
+            df_b = process_telemetry(pd.read_csv(os.path.join(DATA_DIR, b_file)))
+            res_d, res_b, grid, delta = analyze_laps(df_d, df_b)
+            
+            st.metric("Total Lap Delta", f"{delta[-1]:.3f}s", delta_color="inverse")
+            render_audit(res_d, res_b, grid, delta, profile)
+        except Exception as e:
+            st.error(f"Error processing files: {e}")
     else:
-        st.info("Ensure CSV files are available in the directory to begin.")
+        st.info("Upload CSV files to begin.")
 
 if __name__ == "__main__":
     main()
