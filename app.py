@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Race Engineer Pro | TC/ABS Monitor", layout="wide")
+st.set_page_config(page_title="Race Engineer Pro | Smoothness Heuristics", layout="wide")
 
 def apply_custom_css():
     st.markdown("""
@@ -13,40 +13,21 @@ def apply_custom_css():
         .main { background-color: #0e1117; color: #e0e0e0; }
         .stMetric { background-color: #161b22; border: 1px solid #30363d; padding: 15px; border-radius: 8px; }
         .coach-card { background-color: #1c2128; border-left: 5px solid #00a2ff; padding: 20px; margin-bottom: 15px; }
-        .intervention-alert { background-color: #2d1b1e; border-left: 5px solid #ff4b4b; padding: 15px; margin-bottom: 10px; color: #ff4b4b; font-weight: bold; }
+        .warning-card { background-color: #2d2616; border-left: 5px solid #ffcc00; padding: 20px; margin-bottom: 15px; color: #ffcc00; }
+        .critical-card { background-color: #2d1b1e; border-left: 5px solid #ff4b4b; padding: 20px; margin-bottom: 15px; }
         </style>
     """, unsafe_allow_html=True)
 
-# --- ENGINE: DATA INGESTION & SENSOR FUSION ---
+# --- ENGINE: DATA PROCESSING ---
 
 def process_telemetry(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = [c.strip() for c in df.columns]
-    
-    # 1. Core Physics Channels
-    req = ['LapDistPct', 'Speed', 'Throttle', 'Brake', 'SteeringWheelAngle', 'LatAccel', 'LongAccel']
+    req = ['LapDistPct', 'Speed', 'Throttle', 'Brake', 'SteeringWheelAngle', 'ABSActive', 'TCActive']
     for col in req:
         if col not in df.columns: df[col] = 0.0
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-
-    # 2. TC/ABS Monitoring Logic
-    # Check for native channels
-    if 'TCActive' not in df.columns:
-        # Fallback: Calculate Rear Wheel Slip
-        # Expected columns: WheelSpeed_FL, WheelSpeed_FR, WheelSpeed_RL, WheelSpeed_RR
-        ws_cols = ['WheelSpeed_FL', 'WheelSpeed_FR', 'WheelSpeed_RL', 'WheelSpeed_RR']
-        if all(c in df.columns for c in ws_cols):
-            avg_f = (df['WheelSpeed_FL'] + df['WheelSpeed_FR']) / 2
-            avg_r = (df['WheelSpeed_RL'] + df['WheelSpeed_RR']) / 2
-            # Avoid division by zero
-            avg_f = np.where(avg_f < 1, 1, avg_f)
-            slip = (avg_r / avg_f) - 1
-            df['TCActive'] = (slip > 0.03).astype(int)
-        else:
-            df['TCActive'] = 0
     
-    if 'ABSActive' not in df.columns: df['ABSActive'] = 0
-
-    # 3. Unit Normalization
+    # Normalization
     if df['Speed'].max() < 100: df['Speed'] *= 3.6
     if df['LapDistPct'].max() > 1.1: df['LapDistPct'] /= 100.0
     for col in ['Throttle', 'Brake']:
@@ -58,52 +39,65 @@ def align_and_resample(df_d, df_b, points=5000):
     grid = np.linspace(0, 1, points)
     def interp_channel(df):
         out = pd.DataFrame({'LapDistPct': grid})
-        channels = ['Speed', 'Throttle', 'Brake', 'SteeringWheelAngle', 'TCActive', 'ABSActive']
+        channels = ['Speed', 'Throttle', 'Brake', 'SteeringWheelAngle', 'ABSActive', 'TCActive']
         for col in channels:
             out[col] = np.interp(grid, df['LapDistPct'], df[col]) if col in df.columns else 0.0
         return out
     res_d, res_b = interp_channel(df_d), interp_channel(df_b)
-    res_d['SteeringSmooth'] = res_d['SteeringWheelAngle'].rolling(window=20, center=True).mean().ffill().bfill()
     return res_d, res_b, grid
 
-# --- MODULE: DRIVER COACH (CRUTCH DETECTOR) ---
+# --- MODULE: DRIVER COACH (SMOOTHNESS HEURISTICS) ---
 
-def analyze_exit_phase(res_d, grid):
-    """Analyzes TC dependency from Apex to 100% Throttle."""
-    # Detect a corner (Simplified: Steering > 15)
-    is_corner = np.abs(res_d['SteeringSmooth']) > 15
-    if not any(is_corner): return []
+def analyze_smoothness(df):
+    insights = []
+    
+    # 1. Throttle Modulation (Stabbing Detector)
+    # Window of 50 samples approx 1 second at 50Hz
+    roll_max = df['Throttle'].rolling(window=50, center=True).max()
+    roll_min = df['Throttle'].rolling(window=50, center=True).min()
+    # Detect if throttle swings > 60% within that 1s window
+    stabbing_mask = (roll_max > 80) & (roll_min < 20)
+    
+    if stabbing_mask.any():
+        insights.append({
+            "level": "warning",
+            "msg": "Unstable Platform: Stop stabbing the throttle. The 992 Cup requires a linear squeeze to load the rear tires. Your current input is upsetting the car's pitch and causing mid-corner oscillations."
+        })
 
-    # Find Apex (Min Speed in corner)
-    apex_idx = res_d['Speed'].idxmin()
+    # 2. ABS Threshold Logic (Trail Braking Overshoot)
+    # ABS active while brake pressure is low (< 30%) suggests over-driving the turn-in grip
+    trail_abs = (df['ABSActive'] > 0.5) & (df['Brake'] < 30) & (df['Brake'] > 5)
     
-    # Find 100% Throttle point after apex
-    post_apex = res_d.iloc[apex_idx:]
-    full_throttle_idx = post_apex[post_apex['Throttle'] >= 98].index
-    
-    if len(full_throttle_idx) > 0:
-        exit_indices = res_d.loc[apex_idx : full_throttle_idx[0]]
-        tc_duration = (exit_indices['TCActive'] > 0.5).mean()
+    if trail_abs.sum() > 50: # Significant duration
+        insights.append({
+            "level": "critical",
+            "msg": "ABS Over-reliance: You are triggering ABS deep into the corner. This is locking the front end and preventing rotation. Reduce your brake pressure by 10-15% during the turn-in phase."
+        })
         
-        if tc_duration > 0.15:
-            return [f"High TC Dependency ({tc_duration*100:.1f}% of exit): Your throttle application is too aggressive for the rear grip. Soften initial application to reduce intervention."]
-    return []
+    return insights
 
-# --- MODULE: SETUP TWEAKER (FIXED SETUP EXCEPTIONS) ---
+# --- MODULE: SETUP TWEAKER (FIXED SETUP BIAS CONSULTANT) ---
 
-def render_setup_tweaker(res_d, setup_type):
+def render_setup_tweaker(df, setup_type):
     st.header("🔧 Setup Tweaker")
     
-    # Straight line TC Check (Steering < 10)
-    straight_tc = res_d[(res_d['TCActive'] > 0.5) & (np.abs(res_d['SteeringSmooth']) < 10)]
-    
+    # Calculate ABS Duty Cycle
+    braking_points = df[df['Brake'] > 5]
+    if len(braking_points) > 0:
+        abs_duty_cycle = (braking_points['ABSActive'] > 0.5).sum() / len(braking_points)
+    else:
+        abs_duty_cycle = 0
+
     if setup_type == "Fixed":
-        st.warning("Fixed Setup Mode: Mechanical changes locked. Electronic Maps available.")
-        if not straight_tc.empty:
-            st.error("TC MAP SUGGESTION: TC is triggering in a straight line. Reduce TC Map (Lower Intrusion) to improve longitudinal acceleration.")
+        st.markdown('<div class="warning-card"><strong>Fixed Setup Mode:</strong> Mechanical changes locked. Analyzing Brake Bias requirements...</div>', unsafe_allow_html=True)
+        
+        if abs_duty_cycle > 0.50:
+            st.error(f"BRAKE BIAS ADVICE: ABS is active for {abs_duty_cycle*100:.1f}% of your braking phase. Suggest migrating Brake Bias Forward (0.4% - 0.8%) to stabilize the platform and reduce front-end locking.")
+        else:
+            st.success(f"Brake Bias is within acceptable duty cycle ({abs_duty_cycle*100:.1f}% ABS usage).")
         return
 
-    st.info("Open Setup Mode: All mechanical and electronic parameters available.")
+    st.info("Open Setup Mode: Full mechanical access enabled.")
 
 # --- MAIN APP ---
 
@@ -112,7 +106,6 @@ def main():
     
     with st.sidebar:
         st.title("🛠️ Config")
-        car = st.selectbox("Car Selector", ["Porsche 992 Cup", "GT3 Class"])
         setup = st.radio("Setup Rule", ["Open", "Fixed"])
         st.divider()
         f_d = st.file_uploader("Driver Telemetry", type=['csv'])
@@ -126,37 +119,38 @@ def main():
         t1, t2, t3 = st.tabs(["📊 Analyze Laps", "🧠 Driver Coach", "🔧 Setup Tweaker"])
         
         with t1:
-            # 8-Row Stack with Shaded Interventions
-            fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.02,
-                                subplot_titles=("Speed", "Throttle (TC Shaded)", "Brake (ABS Shaded)", "Steering"))
+            # Telemetry Stack
+            fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05,
+                                subplot_titles=("Speed", "Throttle (Smoothness Check)", "Brake (ABS Threshold)"))
             x = grid * 100
             
-            # Speed
             fig.add_trace(go.Scatter(x=x, y=res_d['Speed'], name="Speed", line=dict(color='cyan')), row=1, col=1)
             
-            # Throttle + TC Shading
+            # Throttle
             fig.add_trace(go.Scatter(x=x, y=res_d['Throttle'], name="Throttle", line=dict(color='#00ff41')), row=2, col=1)
-            tc_zone = res_d['Throttle'].where(res_d['TCActive'] > 0.5)
-            fig.add_trace(go.Scatter(x=x, y=tc_zone, fill='tozeroy', fillcolor='rgba(255, 140, 0, 0.3)', line=dict(width=0), name="TC Active"), row=2, col=1)
+            # Highlight Stabbing areas in red
+            roll_max = res_d['Throttle'].rolling(window=50, center=True).max()
+            roll_min = res_d['Throttle'].rolling(window=50, center=True).min()
+            stabbing = res_d['Throttle'].where((roll_max > 80) & (roll_min < 20))
+            fig.add_trace(go.Scatter(x=x, y=stabbing, name="Stabbing Detected", mode='markers', marker=dict(color='red', size=4)), row=2, col=1)
             
-            # Brake + ABS Shading
+            # Brake
             fig.add_trace(go.Scatter(x=x, y=res_d['Brake'], name="Brake", line=dict(color='#ff4b4b')), row=3, col=1)
-            abs_zone = res_d['Brake'].where(res_d['ABSActive'] > 0.5)
-            fig.add_trace(go.Scatter(x=x, y=abs_zone, fill='tozeroy', fillcolor='rgba(255, 255, 0, 0.3)', line=dict(width=0), name="ABS Active"), row=3, col=1)
+            # Highlight ABS Trail Braking Overshoot
+            trail_abs_pts = res_d['Brake'].where((res_d['ABSActive'] > 0.5) & (res_d['Brake'] < 30))
+            fig.add_trace(go.Scatter(x=x, y=trail_abs_pts, name="ABS Overshoot", mode='markers', marker=dict(color='yellow', size=5)), row=3, col=1)
             
-            # Steering
-            fig.add_trace(go.Scatter(x=x, y=res_d['SteeringSmooth'], name="Steering", line=dict(color='white')), row=4, col=1)
-            
-            fig.update_layout(height=1000, template="plotly_dark", showlegend=False)
+            fig.update_layout(height=900, template="plotly_dark", showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
 
         with t2:
             st.header("🧠 Driver Coach")
-            insights = analyze_exit_phase(res_d, grid)
+            insights = analyze_smoothness(res_d)
             for insight in insights:
-                st.markdown(f'<div class="coach-card">{insight}</div>', unsafe_allow_html=True)
+                card_class = "warning-card" if insight['level'] == "warning" else "critical-card"
+                st.markdown(f'<div class="{card_class}">{insight["msg"]}</div>', unsafe_allow_html=True)
             if not insights:
-                st.success("Clean Exit: No significant TC dependency detected in corner exits.")
+                st.success("Input Smoothness: Excellent. No stabbing or ABS over-reliance detected.")
 
         with t3:
             render_setup_tweaker(res_d, setup)
