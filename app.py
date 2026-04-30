@@ -11,7 +11,8 @@ def apply_custom_css():
     st.markdown("""
         <style>
         .main { background-color: #0e1117; }
-        .stMetric { background-color: #161b22; border: 1px solid #30363d; padding: 10px; border-radius: 5px; }
+        [data-testid="stMetricValue"] { font-size: 1.8rem; color: #00d1ff; }
+        .stTabs [data-baseweb="tab-list"] { gap: 24px; }
         </style>
     """, unsafe_allow_html=True)
 
@@ -19,43 +20,45 @@ def apply_custom_css():
 
 def process_telemetry(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Cleans, casts, and sorts Garage 61 telemetry data.
+    Standardizes Garage 61 CSV data for the interpolation engine.
     """
-    # Standardize column names (handling potential case sensitivity)
     df.columns = [c.strip() for c in df.columns]
     
-    # Required columns for the MVP
     required = ['LapDistPct', 'Speed', 'Throttle', 'Brake']
     for col in required:
         if col not in df.columns:
-            st.error(f"Critical Error: Column '{col}' missing from CSV.")
+            st.error(f"Missing column: {col}")
             st.stop()
 
-    # Convert to numeric, drop rows with NaN in LapDistPct
+    # Cast to numeric
     for col in required:
         df[col] = pd.to_numeric(df[col], errors='coerce')
     
     df = df.dropna(subset=['LapDistPct'])
 
-    # CRITICAL: Sort by distance and remove duplicates for interpolation
+    # DATA NORMALIZATION: Ensure LapDistPct is 0.0 to 1.0
+    if df['LapDistPct'].max() > 1.1:
+        df['LapDistPct'] = df['LapDistPct'] / 100.0
+    
+    # Scale Throttle/Brake to 0-100
+    for col in ['Throttle', 'Brake']:
+        if df[col].max() <= 1.1:
+            df[col] = df[col] * 100.0
+
+    # Sort and drop duplicates for np.interp
     df = df.sort_values(by='LapDistPct').drop_duplicates(subset=['LapDistPct'])
     
-    # Scale Throttle/Brake to 0-100 if they are in 0-1 format
-    for col in ['Throttle', 'Brake']:
-        if df[col].max() <= 1.1: # Threshold to detect 0-1 scaling
-            df[col] = df[col] * 100
-
     return df[required]
 
 def align_and_resample(driver_df: pd.DataFrame, bench_df: pd.DataFrame, samples: int = 5000):
     """
-    High-precision resampling to a common spatial grid.
+    Creates a common 0.0 -> 1.0 spatial grid and maps both laps to it.
     """
-    grid = np.linspace(0, 100, samples) # LapDistPct is usually 0-100
+    # Grid is 0.0 to 1.0 to match normalized LapDistPct
+    grid = np.linspace(0, 1, samples)
     
     def interpolate_lap(df):
         resampled = pd.DataFrame({'LapDistPct': grid})
-        # Use np.interp on sorted data
         for col in ['Speed', 'Throttle', 'Brake']:
             resampled[col] = np.interp(grid, df['LapDistPct'], df[col])
         return resampled
@@ -64,25 +67,22 @@ def align_and_resample(driver_df: pd.DataFrame, bench_df: pd.DataFrame, samples:
 
 def calculate_time_delta(driver_df: pd.DataFrame, bench_df: pd.DataFrame, grid: np.array):
     """
-    Calculates time delta based on speed and distance change.
+    Calculates time delta based on speed (m/s) and distance.
     """
-    v_driver = driver_df['Speed'].values / 3.6 # km/h to m/s
-    v_bench = bench_df['Speed'].values / 3.6
+    v_driver = np.maximum(driver_df['Speed'].values / 3.6, 0.5)
+    v_bench = np.maximum(bench_df['Speed'].values / 3.6, 0.5)
     
-    # Floor speed to avoid infinity (0.5 m/s minimum)
-    v_driver = np.maximum(v_driver, 0.5)
-    v_bench = np.maximum(v_bench, 0.5)
-    
-    # ds = change in % * estimated lap length (normalized to 1000m for relative delta)
-    # The absolute lap length doesn't change the shape of the delta curve.
-    ds = np.diff(grid, prepend=0) * 10 
+    # Calculate ds (change in distance in meters) 
+    # We use 5000m as a proxy for an average GT3 lap length for delta scaling
+    track_length_estimate = 5000 
+    ds = np.diff(grid, prepend=0) * track_length_estimate
     
     dt_driver = ds / v_driver
     dt_bench = ds / v_bench
     
     return np.cumsum(dt_driver - dt_bench)
 
-# --- UI LOGIC ---
+# --- APP LAYOUT ---
 
 def main():
     apply_custom_css()
@@ -93,17 +93,20 @@ def main():
     bench_file = st.sidebar.file_uploader("Upload Benchmark Lap", type=['csv'])
     
     if driver_file and bench_file:
-        # Load and clean
+        # Data Pipeline
         df_d = process_telemetry(pd.read_csv(driver_file))
         df_b = process_telemetry(pd.read_csv(bench_file))
         
-        # Resample
         res_d, res_b, grid = align_and_resample(df_d, df_b)
-        
-        # Delta
         delta = calculate_time_delta(res_d, res_b, grid)
         
-        # Visualization
+        # UI Metrics
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Lap Time Delta", f"{delta[-1]:.3f}s", delta_color="inverse")
+        m2.metric("Driver Samples", len(df_d))
+        m3.metric("Alignment Precision", f"{len(grid)} pts")
+
+        # Telemetry Chart
         fig = make_subplots(
             rows=4, cols=1, 
             shared_xaxes=True, 
@@ -112,38 +115,32 @@ def main():
             subplot_titles=("Time Delta (s)", "Speed (km/h)", "Throttle (%)", "Brake (%)")
         )
 
-        # Plotting Logic
-        colors = {'driver': '#00d1ff', 'bench': '#ffffff', 'delta': '#ff4b4b'}
+        # Plotting
+        # X is multiplied by 100 in the display only for readability (0-100%)
+        display_x = grid * 100 
         
-        # Time Delta
-        fig.add_trace(go.Scatter(x=grid, y=delta, name="Delta", line=dict(color=colors['delta'], width=2)), row=1, col=1)
+        # Row 1: Delta
+        fig.add_trace(go.Scatter(x=display_x, y=delta, name="Delta", line=dict(color='#ff4b4b', width=2)), row=1, col=1)
         
-        # Speed
-        fig.add_trace(go.Scatter(x=grid, y=res_b['Speed'], name="Bench", line=dict(color=colors['bench'], dash='dash', width=1)), row=2, col=1)
-        fig.add_trace(go.Scatter(x=grid, y=res_d['Speed'], name="Driver", line=dict(color=colors['driver'], width=2)), row=2, col=1)
+        # Row 2: Speed
+        fig.add_trace(go.Scatter(x=display_x, y=res_b['Speed'], name="Bench", line=dict(color='rgba(255,255,255,0.3)', dash='dash')), row=2, col=1)
+        fig.add_trace(go.Scatter(x=display_x, y=res_d['Speed'], name="Driver", line=dict(color='#00d1ff', width=2)), row=2, col=1)
         
-        # Throttle
-        fig.add_trace(go.Scatter(x=grid, y=res_b['Throttle'], name="Bench T", line=dict(color=colors['bench'], dash='dash', width=1)), row=3, col=1)
-        fig.add_trace(go.Scatter(x=grid, y=res_d['Throttle'], name="Driver T", line=dict(color='#00ff41', width=2)), row=3, col=1)
+        # Row 3: Throttle
+        fig.add_trace(go.Scatter(x=display_x, y=res_b['Throttle'], name="Bench", line=dict(color='rgba(255,255,255,0.3)', dash='dash')), row=3, col=1)
+        fig.add_trace(go.Scatter(x=display_x, y=res_d['Throttle'], name="Driver", line=dict(color='#00ff41', width=2)), row=3, col=1)
         
-        # Brake
-        fig.add_trace(go.Scatter(x=grid, y=res_b['Brake'], name="Bench B", line=dict(color=colors['bench'], dash='dash', width=1)), row=4, col=1)
-        fig.add_trace(go.Scatter(x=grid, y=res_d['Brake'], name="Driver B", line=dict(color='#ff4b4b', width=2)), row=4, col=1)
+        # Row 4: Brake
+        fig.add_trace(go.Scatter(x=display_x, y=res_b['Brake'], name="Bench", line=dict(color='rgba(255,255,255,0.3)', dash='dash')), row=4, col=1)
+        fig.add_trace(go.Scatter(x=display_x, y=res_d['Brake'], name="Driver", line=dict(color='#ff4b4b', width=2)), row=4, col=1)
 
-        fig.update_layout(height=900, template="plotly_dark", showlegend=False, hovermode="x unified")
-        fig.update_yaxes(range=[0, 105], row=3, col=1) # Throttle %
-        fig.update_yaxes(range=[0, 105], row=4, col=1) # Brake %
+        fig.update_layout(height=850, template="plotly_dark", showlegend=False, hovermode="x unified", margin=dict(t=50))
+        fig.update_xaxes(title_text="Track Distance (%)", row=4, col=1)
         
         st.plotly_chart(fig, use_container_width=True)
         
-        # Health Check Metrics
-        cols = st.columns(3)
-        cols[0].metric("Driver Data Points", len(df_d))
-        cols[1].metric("Benchmark Data Points", len(df_b))
-        cols[2].metric("Resampled Points", len(grid))
-
     else:
-        st.info("Upload two CSV files to begin analysis.")
+        st.info("Awaiting telemetry CSV files from Garage 61.")
 
 if __name__ == "__main__":
     main()
