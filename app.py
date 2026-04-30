@@ -798,7 +798,7 @@ Keep it direct. No bullet-point overload. Talk to them like a coach in a garage,
             # Initialising at module level causes NotFound on Streamlit Cloud
             # because the API call fires before secrets are fully resolved
             # on cold start. Lazy init inside the button click is safe.
-            _model = genai.GenerativeModel("gemini-1.5-flash")
+           _model = genai.GenerativeModel("gemini-2.0-flash")
             response = _model.generate_content(prompt)
             st.markdown("### Your Coaching Brief")
             st.markdown(response.text)
@@ -996,7 +996,7 @@ Give me:
 Keep it short and direct.
 """
         with st.spinner("Reading your session..."):
-            _model = genai.GenerativeModel("gemini-1.5-flash")
+            _model = genai.GenerativeModel("gemini-2.0-flash")
             response = _model.generate_content(prompt)
             st.markdown(response.text)
 
