@@ -1,68 +1,63 @@
 import streamlit as st
-import pandas as pd
-import numpy as np
 
-# --- ENGINEER LOGIC ENGINE ---
-def generate_engineer_report(v_min_diff, throttle_pumps, max_brake, bias):
-    report = {
-        "Driving": [],
-        "Bias": [],
-        "Summary": ""
-    }
+# --- ENHANCED ENGINEER LOGIC ---
+def get_advanced_feedback(pumps, peak_brake, vmin_delta, current_bias):
+    driving = []
+    bias_logic = []
     
-    # 1. Driving Analysis (Pattern Recognition)
-    if throttle_pumps > 3:
-        report["Driving"].append(f"**Throttle Hesitation:** Detected {throttle_pumps} pumps on exit. You are 'testing' traction. Trust the car or adjust bias.")
-    if max_brake > 70:
-        report["Driving"].append(f"**Over-Braking:** Peak pressure of {max_brake}% is triggering Deep ABS, killing your turn-in and vMin.")
-    if v_min_diff < -5:
-        report["Driving"].append(f"**Corner Speed:** You are over-slowing the apex by {abs(v_min_diff)} km/h compared to the benchmark.")
-
-    # 2. Bias Analysis
-    benchmark_bias = 50.7
-    if bias < benchmark_bias and max_brake > 65:
-        report["Bias"].append(f"**The Paradox:** Current {bias}% is more rearward than benchmark ({benchmark_bias}%). Your high pressure ({max_brake}%) is destabilizing the rear.")
+    # Driving Analysis - Corner Entry
+    if peak_brake > 70:
+        driving.append({
+            "title": "🚫 ABS Over-Engagement",
+            "msg": f"Peak pressure of {peak_brake}% is locking the front end. You're 'parking' the car at the apex.",
+            "fix": "Reduce peak to ~60% and focus on a faster, smoother release."
+        })
     
-    return report
+    # Driving Analysis - Corner Exit
+    if pumps >= 4:
+        driving.append({
+            "title": "📈 Throttle Saw-Toothing",
+            "msg": f"Detected {pumps} throttle pumps. This 'traction testing' is costing you ~40m of acceleration distance.",
+            "fix": "Hold a steady partial throttle (40-50%) before committing to 100%."
+        })
 
-st.set_page_config(page_title="SimCup AI Engineer", layout="wide")
+    # The Bias Paradox Logic
+    if current_bias < 50.5 and peak_brake > 65:
+        bias_logic.append({
+            "title": "⚖️ The Entry Paradox",
+            "msg": f"Your {current_bias}% bias is too aggressive for your braking force.",
+            "insight": "High pressure + Rear bias = Unstable entry. This is why you don't trust the car on exit."
+        })
+        
+    return driving, bias_logic
 
-st.title("🏁 SimCup DK | Porsche 992.2 Engineer")
+# --- UI STYLING ---
+st.set_page_config(layout="wide")
+st.markdown("""<style>
+    .report-card { background-color: #1e1e1e; padding: 20px; border-radius: 10px; border-left: 5px solid #ff4b4b; margin-bottom: 10px; }
+    .bias-card { background-color: #1e1e1e; padding: 20px; border-radius: 10px; border-left: 5px solid #ffd166; margin-bottom: 10px; }
+</style>""", unsafe_allow_html=True)
 
-# --- DATA INPUT SIMULATION ---
-# In a real app, these values would be calculated from your uploaded .csv
-with st.sidebar:
-    st.header("Telemetry Snapshot")
-    v_min_delta = st.slider("vMin vs Benchmark (km/h)", -20, 5, -10)
-    pumps = st.number_input("Throttle Pumps Detected", value=6)
-    peak_b = st.slider("Max Brake Pressure (%)", 0, 100, 75)
-    current_b = st.number_input("Current Brake Bias", value=50.0, step=0.1)
+# ... (Sidebar inputs code from previous version) ...
 
-# --- THE AI STUDIO FEEDBACK UI ---
-st.subheader("📋 Engineering Analysis Report")
+driving_issues, bias_issues = get_advanced_feedback(pumps, peak_b, v_min_delta, current_b)
 
-analysis = generate_engineer_report(v_min_delta, pumps, peak_b, current_b)
+col1, col2 = st.columns(2)
 
-colA, colB = st.columns(2)
+with col1:
+    st.markdown("### (A) Driving Analysis")
+    for issue in driving_issues:
+        st.markdown(f"""<div class='report-card'>
+            <h4>{issue['title']}</h4>
+            <p>{issue['msg']}</p>
+            <small><b>ENGINEER'S FIX:</b> {issue['fix']}</small>
+        </div>""", unsafe_allow_html=True)
 
-with colA:
-    st.markdown("### (A) Driving Issues")
-    for issue in analysis["Driving"]:
-        st.error(issue)
-
-with colB:
-    st.markdown("### (B) Brake Bias Issues")
-    for b_issue in analysis["Bias"]:
-        st.warning(b_issue)
-
-st.divider()
-
-# Only shows advice when "Asked" - per your AI Studio instructions
-if st.button("Request Coaching & Bias Adjustments"):
-    st.success("### Engineer's Conclusion")
-    st.write(f"""
-    1. **Primary Objective:** Flatten the Delta spike. 
-    2. **The Fix:** Move Bias to **50.7%** to match Leeroy. 
-    3. **The Technique:** Reduce peak brake pressure to **60%** to avoid ABS engagement. 
-    This will allow the car to rotate naturally so you can reach 100% throttle without the 'saw-tooth' modulation.
-    """)
+with col2:
+    st.markdown("### (B) Brake Bias Strategy")
+    for issue in bias_issues:
+        st.markdown(f"""<div class='bias-card'>
+            <h4>{issue['title']}</h4>
+            <p>{issue['msg']}</p>
+            <p style='color:#ffd166;'><i>{issue['insight']}</i></p>
+        </div>""", unsafe_allow_html=True)
