@@ -8,8 +8,8 @@ from plotly.subplots import make_subplots
 st.set_page_config(page_title="Race Engineer Pro | iRacing", layout="wide")
 
 # !! SKIFT DISSE STIER TIL HVOR DU GEMMER FILERNE LOKALT !!
-DEFAULT_DRIVER    = r"Garage_61_-_Jonas_Hauerbach_-_Porsche_911_Cup__992_2__-_Circuit_Zandvoort__Grand_Prix__-_01_41_980_-_01KQAKNQHNGGR7RTTC9DMD0F59.csv"
-DEFAULT_BENCHMARK = r"Garage_61_-_Leeroy_Malmross_-_Porsche_911_Cup__992_2__-_Circuit_Zandvoort__Grand_Prix__-_01_41_332_-_01KQ5E93PS1W2T3SH5ECRJNCF6.csv"
+DEFAULT_DRIVER    = "Garage_61_-_Jonas_Hauerbach_-_Porsche_911_Cup__992_2__-_Circuit_Zandvoort__Grand_Prix__-_01_41_980_-_01KQAKNQHNGGR7RTTC9DMD0F59.csv"
+DEFAULT_BENCHMARK = "Garage_61_-_Leeroy_Malmross_-_Porsche_911_Cup__992_2__-_Circuit_Zandvoort__Grand_Prix__-_01_41_332_-_01KQ5E93PS1W2T3SH5ECRJNCF6.csv"
 
 TRACK_DB = {
     "Zandvoort (GP)": 4259,
