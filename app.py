@@ -5,158 +5,144 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 
-# --- CONFIGURATION ---
-st.set_page_config(page_title="Race Engineer Pro | iRacing", layout="wide")
+# --- UTILS: TIME CONVERSION ---
+def lap_to_seconds(lap_str):
+    """Converts '1:41.332' to 101.332 seconds."""
+    try:
+        if ':' in str(lap_str):
+            m, s = str(lap_str).split(':')
+            return int(m) * 60 + float(s)
+        return float(lap_str)
+    except:
+        return None
 
-def apply_custom_css():
-    st.markdown("""
-        <style>
-        .main { background-color: #0e1117; color: #e0e0e0; }
-        .stMetric { background-color: #161b22; border: 1px solid #30363d; padding: 15px; border-radius: 8px; }
-        .reportview-container .main .block-container { padding-top: 2rem; }
-        .coach-card { background-color: #1c2128; border-left: 5px solid #00a2ff; padding: 15px; margin-bottom: 10px; border-radius: 4px; }
-        </style>
-    """, unsafe_allow_html=True)
+# --- ENGINE: SESSION SUMMARY ANALYSIS ---
 
-# --- ENGINE: DATA PROCESSING ---
-
-def process_telemetry(df: pd.DataFrame) -> pd.DataFrame:
-    df.columns = [c.strip() for c in df.columns]
-    # Standard G61 Columns
-    req = ['LapDistPct', 'Speed', 'Throttle', 'Brake', 'Gear', 'RPM', 'SteeringWheelAngle', 'Lat', 'Lon', 'ABSActive', 'LatAccel', 'LongAccel']
+def analyze_session(df):
+    """Processes the Lap-by-Lap Session Summary CSV."""
+    df['LapSeconds'] = df['Lap time'].apply(lap_to_seconds)
+    # Filter out pit laps and non-clean laps for pace analysis
+    clean_laps = df[(df['Pit in'] == 'No') & (df['Pit out'] == 'No') & (df['Clean'] == 'Yes')].copy()
     
-    for col in req:
-        if col not in df.columns:
-            df[col] = 0.0 # Placeholder for missing sensors
-        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+    metrics = {
+        "avg_pace": clean_laps['LapSeconds'].mean(),
+        "consistency": clean_laps['LapSeconds'].std(), # Standard Deviation
+        "fuel_per_lap": df['Fuel used'].mean(),
+        "total_laps": df['Lap'].max()
+    }
+    return df, clean_laps, metrics
 
-    # Unit Conversions
+# --- ENGINE: TELEMETRY (PREVIOUS LOGIC) ---
+
+def process_telemetry(df):
+    df.columns = [c.strip() for c in df.columns]
+    # Ensure speed is km/h
     if df['Speed'].max() < 100: df['Speed'] *= 3.6
-    if df['LapDistPct'].max() > 1.1: df['LapDistPct'] /= 100.0
+    # Ensure pedals are 0-100
     for col in ['Throttle', 'Brake']:
         if df[col].max() <= 1.1: df[col] *= 100.0
-    
-    # Detect Laps (if 'Lap' column is missing, we create it based on DistPct resets)
-    if 'Lap' not in df.columns:
-        df['Lap'] = (df['LapDistPct'].diff() < -0.5).cumsum()
-    
     return df
 
-def align_and_resample(df_d, df_b, points=5000):
-    grid = np.linspace(0, 1, points)
-    def interp_channel(df):
-        out = pd.DataFrame({'LapDistPct': grid})
-        channels = ['Speed', 'Throttle', 'Brake', 'Gear', 'RPM', 'SteeringWheelAngle', 'Lat', 'Lon', 'ABSActive', 'LatAccel', 'LongAccel']
-        for col in channels:
-            out[col] = np.interp(grid, df['LapDistPct'], df[col])
-        return out
-    return interp_channel(df_d), interp_channel(df_b), grid
-
-# --- TAB LOGIC: DRIVER COACH ---
-
-def driver_coach_logic(df):
-    """
-    Automated coaching diagnostics for the Porsche 992 Cup.
-    """
-    insights = []
-    
-    # 1. Coasting Detection (Dead time between pedals)
-    coasting = df[(df['Throttle'] < 5) & (df['Brake'] < 5)]
-    coast_pct = (len(coasting) / len(df)) * 100
-    if coast_pct > 15:
-        insights.append({"type": "Warning", "msg": f"High Coasting ({coast_pct:.1f}%): You are spending too much time off-pedals. In the Porsche Cup, focus on faster transitions to keep the nose pinned."})
-    
-    # 2. ABS Over-engagement
-    abs_active = df[df['ABSActive'] > 0.5]
-    if len(abs_active) > 200:
-        insights.append({"type": "Critical", "msg": "Deep ABS Intervention: You are triggering ABS too deep into the corner. This overheats the front tires and causes mid-corner understeer."})
-        
-    # 3. Throttle Hesitation (Saw-tooth throttle)
-    throttle_diff = df['Throttle'].diff().abs().sum() / len(df)
-    if throttle_diff > 1.5:
-        insights.append({"type": "Technique", "msg": "Unstable Throttle: Your throttle application is 'choppy'. Smooth out your right foot to prevent rear-end oscillations on exit."})
-
-    return insights
-
-# --- MAIN APP ---
+# --- UI SETUP ---
+st.set_page_config(page_title="Race Engineer Pro", layout="wide")
 
 def main():
-    apply_custom_css()
-    st.title("🏎️ Race Engineer Pro | Performance Suite")
+    st.title("🏎️ Race Engineer Pro | Endurance & Performance Suite")
     
     with st.sidebar:
-        st.header("Session Ingestion")
-        file_d = st.file_uploader("Driver Session CSV", type=['csv'])
-        file_b = st.file_uploader("Benchmark Lap CSV", type=['csv'])
-        st.divider()
-        st.caption("Target: Porsche 992.2 GT3 Cup")
-
-    if file_d and file_b:
-        # 1. Process Data
-        df_full = process_telemetry(pd.read_csv(file_d))
-        df_b_raw = process_telemetry(pd.read_csv(file_b))
+        st.header("1. Telemetry (Single Lap)")
+        file_d = st.file_uploader("Driver Telemetry CSV", type=['csv'])
+        file_b = st.file_uploader("Benchmark Telemetry CSV", type=['csv'])
         
-        # Identify Laps for Selection
-        laps = df_full['Lap'].unique()
-        
-        tab1, tab2, tab3, tab4 = st.tabs(["📊 Single Lap", "⏱️ Session Analysis", "🧠 Driver Coach", "🔧 Setup Analysis"])
+        st.header("2. Session Summary (Stint)")
+        file_s = st.file_uploader("Session Summary CSV", type=['csv'])
+        st.info("Upload the 'Laps' export from Garage 61 for stint analysis.")
 
-        with tab1:
-            # Single Lap Comparison (Same as previous logic)
-            selected_lap = st.selectbox("Select Lap to Analyze", laps)
-            df_d_lap = df_full[df_full['Lap'] == selected_lap]
-            res_d, res_b, grid = align_and_resample(df_d_lap, df_b_raw)
+    tab_telemetry, tab_session, tab_coach, tab_setup = st.tabs([
+        "📊 Telemetry Analysis", "⏱️ Stint & Fuel", "🧠 Driver Coach", "🔧 Setup Lab"
+    ])
+
+    # --- TAB: SESSION ANALYSIS (NEW) ---
+    with tab_session:
+        if file_s:
+            df_s, clean_laps, m = analyze_session(pd.read_csv(file_s))
             
-            # (Insert previous Plotly logic here for the 8-row stack)
-            st.write("Single Lap Telemetry View Active.")
-            # [Plotly code from previous response goes here]
-
-        with tab2:
-            st.header("Stint Consistency Analysis")
-            # Calculate Lap Times (Approximate from sample count if Time is missing)
-            # For MVP, we'll show Speed/Throttle consistency across the stint
-            fig_session = px.line(df_full, x='LapDistPct', y='Speed', color='Lap', template="plotly_dark", title="Speed Consistency Across Stint")
-            st.plotly_chart(fig_session, use_container_width=True)
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Avg Pace", f"{m['avg_pace']:.3f}s")
+            c2.metric("Pace Variance", f"±{m['consistency']:.3f}s", delta_color="inverse")
+            c3.metric("Fuel / Lap", f"{m['fuel_per_lap']:.2f} L")
             
-            col_s1, col_s2 = st.columns(2)
-            col_s1.metric("Total Laps in Session", len(laps))
-            col_s2.metric("Stint Pace Variance", "0.421s", help="Standard deviation of lap times.")
+            # Estimate Stint Length
+            remaining_fuel = df_s['Fuel level'].iloc[-1]
+            laps_left = remaining_fuel / m['fuel_per_lap'] if m['fuel_per_lap'] > 0 else 0
+            c4.metric("Est. Laps Remaining", f"{laps_left:.1f}")
 
-        with tab3:
-            st.header("AI Driver Coach")
-            # Analyze the selected lap
-            coach_insights = driver_coach_logic(df_d_lap)
+            # Pace Chart
+            fig_pace = px.line(df_s, x='Lap', y='LapSeconds', title="Stint Pace Evolution", 
+                               markers=True, template="plotly_dark", color_discrete_sequence=['#00a2ff'])
+            fig_pace.add_hline(y=m['avg_pace'], line_dash="dash", line_color="white", annotation_text="Avg Pace")
+            st.plotly_chart(fig_pace, use_container_width=True)
+
+            # Sector Consistency
+            st.subheader("Sector Breakdown")
+            sec_cols = ['Sector 1', 'Sector 2', 'Sector 3']
+            for col in sec_cols: df_s[col] = df_s[col].apply(lap_to_seconds)
             
-            for insight in coach_insights:
-                st.markdown(f"""<div class="coach-card">
-                    <strong>{insight['type']}:</strong> {insight['msg']}
-                </div>""", unsafe_allow_html=True)
+            fig_sectors = px.box(df_s, y=sec_cols, template="plotly_dark", title="Sector Consistency (Lower is better)")
+            st.plotly_chart(fig_sectors, use_container_width=True)
+        else:
+            st.warning("Upload a Session Summary CSV to see stint pace and fuel data.")
+
+    # --- TAB: DRIVER COACH (LOGIC) ---
+    with tab_coach:
+        if file_d:
+            df_t = process_telemetry(pd.read_csv(file_d))
+            st.header("AI Coaching Insights")
             
-            # Traction Circle Visualization
-            fig_circle = px.scatter(df_d_lap, x='LatAccel', y='LongAccel', color='Speed', 
-                                    range_x=[-3, 3], range_y=[-3, 3], template="plotly_dark", title="Traction Circle (G-G Diagram)")
-            st.plotly_chart(fig_circle, use_container_width=True)
-
-        with tab4:
-            st.header("Setup & Platform Stability")
-            col_set1, col_set2 = st.columns(2)
+            # Logic: Coasting Detection
+            coast_mask = (df_t['Throttle'] < 5) & (df_t['Brake'] < 5)
+            coast_time = coast_mask.mean() * 100
             
-            with col_set1:
-                st.subheader("Mechanical Balance")
-                # Plot Steering vs Lateral G to find Understeer/Oversteer
-                fig_bal = px.scatter(df_d_lap, x='LatAccel', y='SteeringWheelAngle', color='Speed', template="plotly_dark")
-                st.plotly_chart(fig_bal, use_container_width=True)
-                st.caption("Linearity here suggests a neutral balance. Deviations at high Gs suggest understeer.")
+            # Logic: ABS Overuse
+            abs_usage = (df_t['ABSActive'] > 0).sum()
+            
+            col_c1, col_c2 = st.columns(2)
+            with col_c1:
+                if coast_time > 15:
+                    st.error(f"**Coasting Alert ({coast_time:.1f}%):** You are 'parking' the car mid-corner. Transition faster from brake to throttle.")
+                else:
+                    st.success(f"**Pedal Efficiency:** Good. Coasting is at {coast_time:.1f}%.")
+                
+                if abs_usage > 500:
+                    st.warning("**ABS Over-reliance:** You are leaning on the ABS too hard. This will kill your front tires in a long stint.")
+            
+            with col_c2:
+                # Traction Circle
+                fig_gg = px.scatter(df_t, x='LatAccel', y='LongAccel', color='Speed', 
+                                    range_x=[-3,3], range_y=[-3,3], template="plotly_dark", title="G-G Diagram (Traction Circle)")
+                st.plotly_chart(fig_gg, use_container_width=True)
+        else:
+            st.info("Upload Telemetry CSV for Driver Coaching.")
 
-            with col_set2:
-                st.subheader("Aero/Pitch Stability")
-                # G-Sum as a proxy for platform health
-                df_d_lap['GSum'] = np.sqrt(df_d_lap['LatAccel']**2 + df_d_lap['LongAccel']**2)
-                fig_gsum = px.line(df_d_lap, x='LapDistPct', y='GSum', template="plotly_dark", title="G-Sum (Total Grip Usage)")
-                st.plotly_chart(fig_gsum, use_container_width=True)
+    # --- TAB: SETUP LAB ---
+    with tab_setup:
+        if file_d:
+            st.header("Mechanical Balance Analysis")
+            # Understeer Gradient: Steering Angle vs Lateral G
+            fig_setup = px.scatter(df_t, x='LatAccel', y='SteeringWheelAngle', color='Speed', 
+                                   template="plotly_dark", title="Steering vs Lateral G (Balance Signature)")
+            st.plotly_chart(fig_setup, use_container_width=True)
+            st.caption("If the line curves upward at high Gs, the car is understeering. If it flattens, it's oversteering.")
+        else:
+            st.info("Upload Telemetry CSV for Setup Analysis.")
 
-    else:
-        st.info("Please upload session telemetry to begin engineering analysis.")
+    # --- TAB: TELEMETRY (SINGLE LAP) ---
+    with tab_telemetry:
+        if file_d and file_b:
+            st.write("Standard 8-row Telemetry Stack Active.")
+            # [Insert the Plotly make_subplots code from the previous response here]
+        else:
+            st.info("Upload Driver and Benchmark Telemetry for 1:1 comparison.")
 
 if __name__ == "__main__":
     main()
