@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Race Engineer Pro | Smoothness Heuristics", layout="wide")
+st.set_page_config(page_title="Race Engineer Pro | Spatial Analysis", layout="wide")
 
 def apply_custom_css():
     st.markdown("""
@@ -22,82 +22,75 @@ def apply_custom_css():
 
 def process_telemetry(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = [c.strip() for c in df.columns]
-    req = ['LapDistPct', 'Speed', 'Throttle', 'Brake', 'SteeringWheelAngle', 'ABSActive', 'TCActive']
-    for col in req:
-        if col not in df.columns: df[col] = 0.0
-        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
     
-    # Normalization
-    if df['Speed'].max() < 100: df['Speed'] *= 3.6
-    if df['LapDistPct'].max() > 1.1: df['LapDistPct'] /= 100.0
+    # 1. Spatial Logic: Ensure LapDist (Meters) exists
+    if 'LapDist' not in df.columns and 'LapDistPct' in df.columns:
+        # Proxy track length (4259m for Zandvoort) if absolute distance is missing
+        track_len = 4259 
+        pct_col = pd.to_numeric(df['LapDistPct'], errors='coerce').fillna(0)
+        if pct_col.max() > 1.1: pct_col /= 100.0
+        df['LapDist'] = pct_col * track_len
+    
+    # 2. Physics Normalization (G-Forces)
+    mapping = {'LatAccel': 'LatG', 'LongAccel': 'LonG', 'LonAccel': 'LonG'}
+    for src, dest in mapping.items():
+        if src in df.columns:
+            df[dest] = pd.to_numeric(df[src], errors='coerce').fillna(0) / 9.81
+    
+    if 'LatG' not in df.columns: df['LatG'] = 0.0
+    if 'LonG' not in df.columns: df['LonG'] = 0.0
+    df['GSum'] = np.sqrt(df['LatG']**2 + df['LonG']**2)
+
+    # 3. Standard Normalization
+    if 'Speed' in df.columns:
+        df['Speed'] = pd.to_numeric(df['Speed'], errors='coerce').fillna(0)
+        if df['Speed'].max() < 100: df['Speed'] *= 3.6
+    
     for col in ['Throttle', 'Brake']:
-        if df[col].max() <= 1.1: df[col] *= 100.0
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            if df[col].max() <= 1.1: df[col] *= 100.0
             
-    return df.sort_values(by='LapDistPct').drop_duplicates(subset=['LapDistPct'])
+    return df.sort_values(by='LapDist').drop_duplicates(subset=['LapDist'])
 
 def align_and_resample(df_d, df_b, points=5000):
-    grid = np.linspace(0, 1, points)
+    """Resamples both laps to a common meter-based grid."""
+    max_dist = df_b['LapDist'].max()
+    grid_meters = np.linspace(0, max_dist, points)
+    
     def interp_channel(df):
-        out = pd.DataFrame({'LapDistPct': grid})
-        channels = ['Speed', 'Throttle', 'Brake', 'SteeringWheelAngle', 'ABSActive', 'TCActive']
+        out = pd.DataFrame({'LapDist': grid_meters})
+        channels = ['Speed', 'Throttle', 'Brake', 'SteeringWheelAngle', 'ABSActive', 'TCActive', 'LatG', 'LonG', 'GSum']
         for col in channels:
-            out[col] = np.interp(grid, df['LapDistPct'], df[col]) if col in df.columns else 0.0
+            if col in df.columns:
+                out[col] = np.interp(grid_meters, df['LapDist'], df[col])
+            else:
+                out[col] = 0.0
         return out
-    res_d, res_b = interp_channel(df_d), interp_channel(df_b)
-    return res_d, res_b, grid
 
-# --- MODULE: DRIVER COACH (SMOOTHNESS HEURISTICS) ---
+    res_d = interp_channel(df_d)
+    res_b = interp_channel(df_b)
+    
+    # Smoothing for heuristics
+    res_d['SteeringSmooth'] = res_d['SteeringWheelAngle'].rolling(window=20, center=True).mean().ffill().bfill()
+    
+    return res_d, res_b, grid_meters
+
+# --- MODULE: DRIVER COACH (HEURISTICS) ---
 
 def analyze_smoothness(df):
     insights = []
-    
-    # 1. Throttle Modulation (Stabbing Detector)
-    # Window of 50 samples approx 1 second at 50Hz
+    # Throttle Stabbing (1-second window approx 50 samples)
     roll_max = df['Throttle'].rolling(window=50, center=True).max()
     roll_min = df['Throttle'].rolling(window=50, center=True).min()
-    # Detect if throttle swings > 60% within that 1s window
-    stabbing_mask = (roll_max > 80) & (roll_min < 20)
-    
-    if stabbing_mask.any():
-        insights.append({
-            "level": "warning",
-            "msg": "Unstable Platform: Stop stabbing the throttle. The 992 Cup requires a linear squeeze to load the rear tires. Your current input is upsetting the car's pitch and causing mid-corner oscillations."
-        })
+    if ((roll_max > 80) & (roll_min < 20)).any():
+        insights.append({"level": "warning", "msg": "Unstable Platform: Stop stabbing the throttle. Squeeze the pedal to load the rear tires."})
 
-    # 2. ABS Threshold Logic (Trail Braking Overshoot)
-    # ABS active while brake pressure is low (< 30%) suggests over-driving the turn-in grip
+    # ABS Trail Braking Overshoot
     trail_abs = (df['ABSActive'] > 0.5) & (df['Brake'] < 30) & (df['Brake'] > 5)
-    
-    if trail_abs.sum() > 50: # Significant duration
-        insights.append({
-            "level": "critical",
-            "msg": "ABS Over-reliance: You are triggering ABS deep into the corner. This is locking the front end and preventing rotation. Reduce your brake pressure by 10-15% during the turn-in phase."
-        })
-        
+    if trail_abs.sum() > 50:
+        insights.append({"level": "critical", "msg": "ABS Over-reliance: You are triggering ABS during turn-in. Reduce brake pressure by 10% to allow rotation."})
     return insights
-
-# --- MODULE: SETUP TWEAKER (FIXED SETUP BIAS CONSULTANT) ---
-
-def render_setup_tweaker(df, setup_type):
-    st.header("🔧 Setup Tweaker")
-    
-    # Calculate ABS Duty Cycle
-    braking_points = df[df['Brake'] > 5]
-    if len(braking_points) > 0:
-        abs_duty_cycle = (braking_points['ABSActive'] > 0.5).sum() / len(braking_points)
-    else:
-        abs_duty_cycle = 0
-
-    if setup_type == "Fixed":
-        st.markdown('<div class="warning-card"><strong>Fixed Setup Mode:</strong> Mechanical changes locked. Analyzing Brake Bias requirements...</div>', unsafe_allow_html=True)
-        
-        if abs_duty_cycle > 0.50:
-            st.error(f"BRAKE BIAS ADVICE: ABS is active for {abs_duty_cycle*100:.1f}% of your braking phase. Suggest migrating Brake Bias Forward (0.4% - 0.8%) to stabilize the platform and reduce front-end locking.")
-        else:
-            st.success(f"Brake Bias is within acceptable duty cycle ({abs_duty_cycle*100:.1f}% ABS usage).")
-        return
-
-    st.info("Open Setup Mode: Full mechanical access enabled.")
 
 # --- MAIN APP ---
 
@@ -114,46 +107,67 @@ def main():
     if f_d and f_b:
         df_d = process_telemetry(pd.read_csv(f_d))
         df_b = process_telemetry(pd.read_csv(f_b))
-        res_d, res_b, grid = align_and_resample(df_d, df_b)
+        res_d, res_b, grid_m = align_and_resample(df_d, df_b)
         
+        # Physics Delta (dt = ds / v)
+        v_d = np.maximum(res_d['Speed'].values / 3.6, 1.0)
+        v_b = np.maximum(res_b['Speed'].values / 3.6, 1.0)
+        ds = np.diff(grid_m, prepend=0)
+        delta = np.cumsum(ds / v_d - ds / v_b)
+        delta = delta - delta[0]
+
         t1, t2, t3 = st.tabs(["📊 Analyze Laps", "🧠 Driver Coach", "🔧 Setup Tweaker"])
         
         with t1:
-            # Telemetry Stack
-            fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05,
-                                subplot_titles=("Speed", "Throttle (Smoothness Check)", "Brake (ABS Threshold)"))
-            x = grid * 100
+            # Telemetry Stack with Meter X-Axis
+            fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03,
+                                subplot_titles=("Time Delta (s)", "Speed (km/h)", "Throttle (%)", "Brake (%)"))
             
-            fig.add_trace(go.Scatter(x=x, y=res_d['Speed'], name="Speed", line=dict(color='cyan')), row=1, col=1)
+            # Row 1: Delta
+            fig.add_trace(go.Scatter(x=grid_m, y=delta, name="Delta", line=dict(color='#ff4b4b', width=2)), row=1, col=1)
             
-            # Throttle
-            fig.add_trace(go.Scatter(x=x, y=res_d['Throttle'], name="Throttle", line=dict(color='#00ff41')), row=2, col=1)
-            # Highlight Stabbing areas in red
-            roll_max = res_d['Throttle'].rolling(window=50, center=True).max()
-            roll_min = res_d['Throttle'].rolling(window=50, center=True).min()
-            stabbing = res_d['Throttle'].where((roll_max > 80) & (roll_min < 20))
-            fig.add_trace(go.Scatter(x=x, y=stabbing, name="Stabbing Detected", mode='markers', marker=dict(color='red', size=4)), row=2, col=1)
+            # Row 2: Speed
+            fig.add_trace(go.Scatter(x=grid_m, y=res_b['Speed'], name="Bench", line=dict(color='rgba(255,255,255,0.3)', dash='dash')), row=2, col=1)
+            fig.add_trace(go.Scatter(x=grid_m, y=res_d['Speed'], name="Driver", line=dict(color='cyan')), row=2, col=1)
             
-            # Brake
-            fig.add_trace(go.Scatter(x=x, y=res_d['Brake'], name="Brake", line=dict(color='#ff4b4b')), row=3, col=1)
-            # Highlight ABS Trail Braking Overshoot
-            trail_abs_pts = res_d['Brake'].where((res_d['ABSActive'] > 0.5) & (res_d['Brake'] < 30))
-            fig.add_trace(go.Scatter(x=x, y=trail_abs_pts, name="ABS Overshoot", mode='markers', marker=dict(color='yellow', size=5)), row=3, col=1)
+            # Row 3: Throttle
+            fig.add_trace(go.Scatter(x=grid_m, y=res_d['Throttle'], name="Throttle", line=dict(color='#00ff41')), row=3, col=1)
             
-            fig.update_layout(height=900, template="plotly_dark", showlegend=False)
+            # Row 4: Brake
+            fig.add_trace(go.Scatter(x=grid_m, y=res_d['Brake'], name="Brake", line=dict(color='#ff4b4b')), row=4, col=1)
+            # ABS Shading
+            abs_pts = res_d['Brake'].where(res_d['ABSActive'] > 0.5)
+            fig.add_trace(go.Scatter(x=grid_m, y=abs_pts, fill='tozeroy', fillcolor='rgba(255,255,0,0.2)', line=dict(width=0)), row=4, col=1)
+            
+            fig.update_layout(height=1000, template="plotly_dark", showlegend=False, hovermode="x unified")
+            fig.update_xaxes(title_text="Distance (meters)", row=4, col=1)
             st.plotly_chart(fig, use_container_width=True)
 
         with t2:
             st.header("🧠 Driver Coach")
             insights = analyze_smoothness(res_d)
             for insight in insights:
-                card_class = "warning-card" if insight['level'] == "warning" else "critical-card"
-                st.markdown(f'<div class="{card_class}">{insight["msg"]}</div>', unsafe_allow_html=True)
-            if not insights:
-                st.success("Input Smoothness: Excellent. No stabbing or ABS over-reliance detected.")
+                card = "warning-card" if insight['level'] == "warning" else "critical-card"
+                st.markdown(f'<div class="{card}">{insight["msg"]}</div>', unsafe_allow_html=True)
+            
+            # G-G Diagram
+            fig_gg = go.Figure()
+            fig_gg.add_trace(go.Scatter(x=res_d['LatG'], y=res_d['LonG'], mode='markers', marker=dict(color=res_d['Speed'], colorscale='Viridis', size=4)))
+            fig_gg.update_layout(template="plotly_dark", title="Traction Circle (G-G)", xaxis=dict(title="Lat G", range=[-2.5, 2.5]), yaxis=dict(title="Lon G", range=[-2.5, 2.5]), height=500, width=500)
+            st.plotly_chart(fig_gg)
 
         with t3:
-            render_setup_tweaker(res_d, setup)
+            st.header("🔧 Setup Tweaker")
+            # Balance Signature (Filtered)
+            mask = (res_d['Speed'] > 60) & (res_d['Brake'] < 5)
+            sig_data = res_d[mask]
+            fig_sig = go.Figure()
+            fig_sig.add_trace(go.Scatter(x=sig_data['LatG'].abs(), y=sig_data['SteeringSmooth'].abs(), mode='markers', marker=dict(color=sig_data['Speed'], size=4)))
+            fig_sig.update_layout(template="plotly_dark", title="Balance Signature (Mid-Corner)", xaxis_title="Lat G", yaxis_title="Steering Angle", height=500)
+            st.plotly_chart(fig_sig, use_container_width=True)
+
+    else:
+        st.info("Upload telemetry CSVs to begin spatial analysis.")
 
 if __name__ == "__main__":
     main()
