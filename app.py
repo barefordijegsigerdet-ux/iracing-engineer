@@ -2,184 +2,214 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
 from plotly.subplots import make_subplots
 
-# --- CONFIGURATION & THEME ---
-st.set_page_config(page_title="Race Engineer Pro | iRacing", layout="wide")
+# --- CONFIGURATION ---
+st.set_page_config(page_title="Race Engineer Pro | Physics Lab", layout="wide")
 
 def apply_custom_css():
     st.markdown("""
         <style>
         .main { background-color: #0e1117; color: #e0e0e0; }
         .stMetric { background-color: #161b22; border: 1px solid #30363d; padding: 15px; border-radius: 8px; }
-        .coach-card { background-color: #1c2128; border-left: 5px solid #00a2ff; padding: 15px; margin-bottom: 10px; border-radius: 4px; }
-        .setup-card { background-color: #1c2128; border-left: 5px solid #ff8c00; padding: 15px; margin-bottom: 10px; border-radius: 4px; }
+        .coach-card { background-color: #1c2128; border-left: 5px solid #00a2ff; padding: 20px; margin-bottom: 15px; border-radius: 4px; }
+        .critical-card { background-color: #2d1b1e; border-left: 5px solid #ff4b4b; padding: 20px; margin-bottom: 15px; border-radius: 4px; }
+        .setup-card { background-color: #1c2128; border-left: 5px solid #ff8c00; padding: 20px; margin-bottom: 15px; border-radius: 4px; }
         </style>
     """, unsafe_allow_html=True)
 
-# --- ENGINE: DATA PROCESSING ---
-
-def lap_to_seconds(lap_str):
-    try:
-        if ':' in str(lap_str):
-            m, s = str(lap_str).split(':')
-            return int(m) * 60 + float(s)
-        return float(lap_str)
-    except: return None
+# --- ENGINE: DATA PROCESSING & MATH CHANNELS ---
 
 def process_telemetry(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = [c.strip() for c in df.columns]
-    req = ['LapDistPct', 'Speed', 'Throttle', 'Brake', 'Gear', 'RPM', 'SteeringWheelAngle', 'Lat', 'Lon', 'ABSActive', 'LatAccel', 'LongAccel']
+    req = ['LapDistPct', 'Speed', 'Throttle', 'Brake', 'SteeringWheelAngle', 'LatAccel', 'LongAccel', 'ABSActive', 'Lat', 'Lon']
     for col in req:
         if col not in df.columns: df[col] = 0.0
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+    
+    # Normalization
     if df['Speed'].max() < 100: df['Speed'] *= 3.6
     if df['LapDistPct'].max() > 1.1: df['LapDistPct'] /= 100.0
     for col in ['Throttle', 'Brake']:
         if df[col].max() <= 1.1: df[col] *= 100.0
-    if 'Lap' not in df.columns:
-        df['Lap'] = (df['LapDistPct'].diff() < -0.5).cumsum()
-    return df
+    
+    # Math Channel: G-Sum
+    df['GSum'] = np.sqrt(df['LatAccel']**2 + df['LongAccel']**2)
+    
+    return df.sort_values(by='LapDistPct').drop_duplicates(subset=['LapDistPct'])
 
 def align_and_resample(df_d, df_b, points=5000):
+    # Dynamic Track Length Calculation
+    # We treat LapDistPct as the master. If LapDist (meters) is missing, 
+    # we assume a 4000m proxy for "2 meter" logic.
     grid = np.linspace(0, 1, points)
     def interp_channel(df):
         out = pd.DataFrame({'LapDistPct': grid})
-        channels = ['Speed', 'Throttle', 'Brake', 'Gear', 'RPM', 'SteeringWheelAngle', 'Lat', 'Lon', 'ABSActive', 'LatAccel', 'LongAccel']
+        channels = ['Speed', 'Throttle', 'Brake', 'SteeringWheelAngle', 'LatAccel', 'LongAccel', 'ABSActive', 'GSum', 'Lat', 'Lon']
         for col in channels: out[col] = np.interp(grid, df['LapDistPct'], df[col])
         return out
     return interp_channel(df_d), interp_channel(df_b), grid
 
-# --- MODULE 1: ANALYZE LAPS ---
-def render_analyze_laps(res_d, res_b, grid, delta, line_dist):
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Time Delta", f"{delta[-1]:.3f}s", delta_color="inverse")
-    c2.metric("Driver Top Speed", f"{res_d['Speed'].max():.1f} km/h")
-    c3.metric("Max Line Deviation", f"{line_dist.max():.2f}m")
-    
-    # Track Map
-    fig_map = go.Figure()
-    fig_map.add_trace(go.Scatter(x=res_b['Lon'], y=res_b['Lat'], line=dict(color='#2a2e35', width=15), hoverinfo='skip'))
-    fig_map.add_trace(go.Scatter(x=res_b['Lon'], y=res_b['Lat'], line=dict(color='#ff3344', width=2), name='Bench'))
-    fig_map.add_trace(go.Scatter(x=res_d['Lon'], y=res_d['Lat'], line=dict(color='#00a2ff', width=2), name='Driver'))
-    fig_map.update_layout(template="plotly_dark", margin=dict(l=0, r=0, t=0, b=0), xaxis=dict(visible=False), 
-                          yaxis=dict(visible=False, scaleanchor="x", scaleratio=1), showlegend=False, height=400)
-    st.plotly_chart(fig_map, use_container_width=True)
+# --- ENGINE: EVENT SEGMENTATION ---
 
-    # Telemetry Stack
-    fig = make_subplots(rows=8, cols=1, shared_xaxes=True, vertical_spacing=0.01,
-                        row_heights=[0.15, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.15],
-                        subplot_titles=("Speed", "Throttle", "Brake", "Gear", "RPM", "Steering", "Line Distance", "Time Delta"))
-    x, c_b, c_d = grid * 100, '#ff3344', '#00a2ff'
-    for i, col in enumerate(['Speed', 'Throttle', 'Brake', 'Gear', 'RPM', 'SteeringWheelAngle'], 1):
-        fig.add_trace(go.Scatter(x=x, y=res_b[col], line=dict(color=c_b, width=1.5)), row=i, col=1)
-        fig.add_trace(go.Scatter(x=x, y=res_d[col], line=dict(color=c_d, width=1.5)), row=i, col=1)
-    fig.add_trace(go.Scatter(x=x, y=line_dist, line=dict(color=c_d, width=2)), row=7, col=1)
-    fig.add_trace(go.Scatter(x=x, y=delta, line=dict(color=c_d, width=2)), row=8, col=1)
-    fig.update_layout(height=1400, template="plotly_dark", showlegend=False, hovermode="x unified")
-    st.plotly_chart(fig, use_container_width=True)
+def detect_events(res_d, steering_threshold=10):
+    """Segments the lap into corners based on steering angle."""
+    is_event = np.abs(res_d['SteeringWheelAngle']) > steering_threshold
+    event_ids = (is_event != pd.Series(is_event).shift()).cumsum()
+    events = []
+    for eid in event_ids.unique():
+        idx = event_ids == eid
+        if is_event[idx].iloc[0]: # Only keep 'True' events (corners)
+            events.append(res_d.index[idx])
+    return events
 
-# --- MODULE 2: SESSION ANALYZER ---
-def render_session_analyzer(file_s):
-    df_s = pd.read_csv(file_s)
-    df_s['LapSeconds'] = df_s['Lap time'].apply(lap_to_seconds)
-    
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Avg Pace", f"{df_s['LapSeconds'].mean():.3f}s")
-    c2.metric("Consistency (StdDev)", f"±{df_s['LapSeconds'].std():.3f}s")
-    c3.metric("Avg Fuel Burn", f"{df_s['Fuel used'].mean():.2f} L")
-    
-    fig_pace = px.line(df_s, x='Lap', y='LapSeconds', markers=True, template="plotly_dark", title="Stint Pace Evolution")
-    st.plotly_chart(fig_pace, use_container_width=True)
-    
-    st.subheader("Sector Consistency")
-    sec_cols = ['Sector 1', 'Sector 2', 'Sector 3']
-    for col in sec_cols: df_s[col] = df_s[col].apply(lap_to_seconds)
-    fig_box = px.box(df_s, y=sec_cols, template="plotly_dark")
-    st.plotly_chart(fig_box, use_container_width=True)
+# --- MODULE: DRIVER COACH (PHYSICS LOGIC) ---
 
-# --- MODULE 3: DRIVER COACH ---
-def render_driver_coach(df_lap):
-    st.header("🧠 AI Coaching Insights")
-    coast_pct = ((df_lap['Throttle'] < 5) & (df_lap['Brake'] < 5)).mean() * 100
-    abs_usage = (df_lap['ABSActive'] > 0.5).sum()
+def analyze_driver_coach(res_d, res_b, grid, delta):
+    events = detect_events(res_d)
+    event_diagnostics = []
     
-    col1, col2 = st.columns(2)
-    with col1:
-        if coast_pct > 15:
-            st.markdown(f'<div class="coach-card"><strong>Warning:</strong> High Coasting ({coast_pct:.1f}%). You are losing time mid-corner. Transition faster between pedals.</div>', unsafe_allow_html=True)
-        if abs_usage > 400:
-            st.markdown(f'<div class="coach-card"><strong>Critical:</strong> Deep ABS Intervention. You are over-braking, which will overheat the front tires in a stint.</div>', unsafe_allow_html=True)
+    # Track Length Proxy (for meter-based logic)
+    track_length = 4000 # Default proxy
+    
+    for event_idx in events:
+        # Slice data for this corner
+        d_ev = res_d.loc[event_idx]
+        b_ev = res_b.loc[event_idx]
+        g_ev = grid[event_idx]
         
-        fig_gg = px.scatter(df_lap, x='LatAccel', y='LongAccel', color='Speed', template="plotly_dark", title="Traction Circle (G-G Diagram)")
-        st.plotly_chart(fig_gg, use_container_width=True)
+        # 1. Time Loss in this event
+        loss = delta[event_idx[-1]] - delta[event_idx[0]]
+        
+        diag = {"indices": event_idx, "loss": loss, "flags": []}
+        
+        # TASK 1: THREE-PHASE LOGIC
+        # Entry: Brake Release Derivative
+        d_brake_release = np.gradient(d_ev['Brake'], g_ev).min() # Steepest negative slope
+        b_brake_release = np.gradient(b_ev['Brake'], g_ev).min()
+        if d_brake_release < b_brake_release * 1.2:
+            diag['flags'].append("Rapid Pitch Recovery: Releasing brake too fast; nose lifting, losing front grip.")
+            
+        # Mid: V-Min Displacement
+        d_vmin_dist = g_ev[np.argmin(d_ev['Speed'])] * track_length
+        b_vmin_dist = g_ev[np.argmin(b_ev['Speed'])] * track_length
+        if d_vmin_dist < (b_vmin_dist - 2):
+            diag['flags'].append("Early Over-slowing: Reaching V-Min too early. Carry more entry speed.")
+            
+        # Exit: Traction Circle Conflict
+        # Check if Throttle increases while Steering is not decreasing
+        steer_delta = np.gradient(np.abs(d_ev['SteeringWheelAngle']))
+        throttle_delta = np.gradient(d_ev['Throttle'])
+        if np.any((throttle_delta > 2) & (steer_delta >= 0)):
+            diag['flags'].append("Understeer Inducement: Applying power before unwinding the wheel.")
+            
+        # TASK 2: G-SUM TRANSITION
+        # Gap between peak braking and peak cornering
+        peak_b_idx = d_ev['Brake'].idxmax()
+        peak_l_idx = d_ev['LatAccel'].abs().idxmax()
+        if peak_l_idx > peak_b_idx:
+            transition_gsum = d_ev.loc[peak_b_idx:peak_l_idx, 'GSum'].mean()
+            bench_transition_gsum = b_ev.loc[peak_b_idx:peak_l_idx, 'GSum'].mean()
+            if transition_gsum < bench_transition_gsum * 0.85:
+                diag['flags'].append("Inefficient Transition: Not blending braking and turning effectively (G-Sum drop).")
+
+        # TASK 4: PORSCHE 992 CUP ABS
+        if np.any((d_ev['ABSActive'] > 0.5) & (np.abs(d_ev['SteeringWheelAngle']) > 15)):
+            diag['flags'].append("CRITICAL: ABS-Induced Understeer. Turning while on ABS is locking the platform.")
+
+        event_diagnostics.append(diag)
+        
+    # Sort by loss and take Top 3
+    top_3 = sorted(event_diagnostics, key=lambda x: x['loss'], reverse=True)[:3]
+    return top_3
+
+# --- MODULE: SETUP TWEAKER (VALIDATION LOGIC) ---
+
+def render_setup_tweaker(res_d, driver_report):
+    st.header("🔧 Setup Tweaker | Validation Logic")
+    
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        st.subheader("Balance Signature Check")
+        # TASK 3: SIGNATURE CHECK
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=res_d['LatAccel'].abs(), y=res_d['SteeringWheelAngle'].abs(), 
+                                 mode='markers', marker=dict(color=res_d['Speed'], colorscale='Viridis')))
+        fig.update_layout(template="plotly_dark", xaxis_title="Lateral G", yaxis_title="Steering Angle", height=400)
+        st.plotly_chart(fig, use_container_width=True)
+        
     with col2:
-        st.info("Coaching Tip: In the Porsche 992 Cup, trail braking is essential to keep the nose weighted. A 'hollow' traction circle suggests you are separating braking and turning too much.")
+        st.subheader("Engineering Override")
+        # Logic to detect plateau
+        # We check if Steering increases significantly while LatAccel stays flat at high Gs
+        high_g = res_d[res_d['LatAccel'].abs() > 1.5]
+        if not high_g.empty:
+            lat_std = high_g['LatAccel'].std()
+            steer_range = high_g['SteeringWheelAngle'].max() - high_g['SteeringWheelAngle'].min()
+            
+            if driver_report == "Understeer":
+                if lat_std < 0.1 and steer_range > 20:
+                    st.error("VALIDATED: Mechanical Understeer detected. LatAccel plateaued while Steering increased.")
+                    st.markdown("- **Action:** Soften Front ARB or Increase Front Wing.")
+                else:
+                    st.warning("OVERRIDE: Mechanical balance is fine. You are turning beyond the slip angle limit (Scrubbing).")
+                    st.markdown("- **Action:** Reduce steering input; wait for the nose to hook.")
+            else:
+                st.info("Select a handling issue to begin validation.")
 
-# --- MODULE 4: SETUP TWEAKER ---
-def render_setup_tweaker(df_lap):
-    st.header("🔧 Setup Diagnosis Engine")
-    
-    with st.expander("Step 1: Driver Subjective Feedback", expanded=True):
-        issue = st.selectbox("What is the primary handling issue?", 
-                             ["None", "Entry Oversteer", "Mid-Corner Understeer", "Exit Oversteer", "Braking Instability"])
-    
-    st.subheader("Step 2: Telemetry Validation")
-    # Calculate Understeer Gradient (Steering vs LatAccel)
-    fig_bal = px.scatter(df_lap, x='LatAccel', y='SteeringWheelAngle', color='Speed', template="plotly_dark", title="Balance Signature")
-    st.plotly_chart(fig_bal, use_container_width=True)
-    
-    st.subheader("Step 3: Engineering Recommendations")
-    if issue == "Mid-Corner Understeer":
-        st.markdown('<div class="setup-card"><strong>Recommendation:</strong> Soften Front ARB by 1 click OR Increase Front Wing angle. Telemetry shows high steering lock with plateauing Lateral G.</div>', unsafe_allow_html=True)
-    elif issue == "Entry Oversteer":
-        st.markdown('<div class="setup-card"><strong>Recommendation:</strong> Increase Rear Wing OR Stiffen Front Springs. This will stabilize the pitch during weight transfer.</div>', unsafe_allow_html=True)
-    elif issue == "Braking Instability":
-        st.markdown('<div class="setup-card"><strong>Recommendation:</strong> Move Brake Bias Forward (0.5% - 1.0%). This prevents the rear from stepping out under heavy deceleration.</div>', unsafe_allow_html=True)
-    else:
-        st.success("Telemetry and Driver feedback suggest a neutral balance. Focus on driving lines.")
-
-# --- MAIN APP LOGIC ---
+# --- MAIN APP ---
 
 def main():
     apply_custom_css()
-    st.title("🏎️ Race Engineer Pro | iRacing Performance Suite")
+    st.title("🏎️ Race Engineer Pro | Porsche 992 Cup Edition")
     
     with st.sidebar:
         st.header("Data Ingestion")
-        f_d = st.file_uploader("Driver Telemetry (Blue)", type=['csv'])
-        f_b = st.file_uploader("Benchmark Telemetry (Red)", type=['csv'])
-        f_s = st.file_uploader("Session Summary (Laps)", type=['csv'])
+        f_d = st.file_uploader("Driver Telemetry", type=['csv'])
+        f_b = st.file_uploader("Benchmark Telemetry", type=['csv'])
         st.divider()
-        st.caption("Target: Porsche 992.2 GT3 Cup")
-
-    tab_analyze, tab_session, tab_coach, tab_setup = st.tabs([
-        "📊 Analyze Laps", "⏱️ Session Analyzer", "🧠 Driver Coach", "🔧 Setup Tweaker"
-    ])
+        driver_issue = st.selectbox("Driver Reported Issue", ["None", "Understeer", "Oversteer"])
 
     if f_d and f_b:
-        df_d_full = process_telemetry(pd.read_csv(f_d))
-        df_b_raw = process_telemetry(pd.read_csv(f_b))
+        df_d = process_telemetry(pd.read_csv(f_d))
+        df_b = process_telemetry(pd.read_csv(f_b))
+        res_d, res_b, grid = align_and_resample(df_d, df_b)
         
-        laps = df_d_full['Lap'].unique()
-        sel_lap = st.sidebar.selectbox("Select Lap for Analysis", laps)
-        df_d_lap = df_d_full[df_d_full['Lap'] == sel_lap]
-        
-        res_d, res_b, grid = align_and_resample(df_d_lap, df_b_raw)
-        v_d = np.maximum(res_d['Speed'].values / 3.6, 1.0)
-        v_b = np.maximum(res_b['Speed'].values / 3.6, 1.0)
-        ds = np.diff(grid, prepend=0) * 4259 
-        delta = np.cumsum(ds / v_d - ds / v_b)
-        line_dist = np.sqrt(((res_d['Lat']-res_b['Lat'])*111000)**2 + ((res_d['Lon']-res_b['Lon'])*67000)**2)
+        # Physics Math
+        v_d, v_b = res_d['Speed'].values / 3.6, res_b['Speed'].values / 3.6
+        delta = np.cumsum(np.diff(grid, prepend=0) * 4000 / np.maximum(v_d, 1.0) - np.diff(grid, prepend=0) * 4000 / np.maximum(v_b, 1.0))
 
-        with tab_analyze: render_analyze_laps(res_d, res_b, grid, delta, line_dist)
-        with tab_coach: render_driver_coach(df_d_lap)
-        with tab_setup: render_setup_tweaker(df_d_lap)
-    
-    with tab_session:
-        if f_s: render_session_analyzer(f_s)
-        else: st.info("Upload Session Summary CSV for stint analysis.")
+        tab_analyze, tab_coach, tab_setup = st.tabs(["📊 Analyze Laps", "🧠 Physics Coach", "🔧 Setup Tweaker"])
+
+        with tab_analyze:
+            # Standard 8-row stack (Simplified for this view)
+            fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.02)
+            fig.add_trace(go.Scatter(x=grid*100, y=delta, name="Delta", line=dict(color='red')), row=1, col=1)
+            fig.add_trace(go.Scatter(x=grid*100, y=res_d['Speed'], name="Speed", line=dict(color='cyan')), row=2, col=1)
+            fig.add_trace(go.Scatter(x=grid*100, y=res_d['GSum'], name="G-Sum", line=dict(color='magenta')), row=3, col=1)
+            fig.add_trace(go.Scatter(x=grid*100, y=res_d['SteeringWheelAngle'], name="Steering", line=dict(color='white')), row=4, col=1)
+            fig.update_layout(height=800, template="plotly_dark", showlegend=False)
+            st.plotly_chart(fig, use_container_width=True)
+
+        with tab_coach:
+            st.header("Top 3 Time-Loss Events")
+            top_events = analyze_driver_coach(res_d, res_b, grid, delta)
+            for i, ev in enumerate(top_events, 1):
+                dist_start = grid[ev['indices'][0]] * 100
+                with st.container():
+                    st.markdown(f"### Event {i} (at {dist_start:.1f}% of lap) | Loss: {ev['loss']:.3f}s")
+                    for flag in ev['flags']:
+                        if "CRITICAL" in flag:
+                            st.markdown(f'<div class="critical-card">{flag}</div>', unsafe_allow_html=True)
+                        else:
+                            st.markdown(f'<div class="coach-card">{flag}</div>', unsafe_allow_html=True)
+
+        with tab_setup:
+            render_setup_tweaker(res_d, driver_issue)
+
+    else:
+        st.info("Awaiting telemetry files for physics-based audit.")
 
 if __name__ == "__main__":
     main()
