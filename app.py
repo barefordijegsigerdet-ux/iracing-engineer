@@ -4,7 +4,7 @@ import numpy as np
 import os
 
 # --- 1. SYSTEM CONFIGURATION & UI ---
-st.set_page_config(page_title="Universal Race Engineer v3.2", layout="wide")
+st.set_page_config(page_title="Universal Race Engineer v3.2.1", layout="wide")
 
 def apply_custom_css():
     st.markdown("""
@@ -47,22 +47,29 @@ def process_telemetry(df):
     df['Dist'] = pd.to_numeric(df[dist_cols[0]], errors='coerce').fillna(0)
     
     # 2. Acceleration Normalization (Logic Fix 3: G-Scale Check)
-    for col in ['LatAccel', 'LongAccel', 'LonAccel']:
+    for col in ['LatAccel', 'LongAccel', 'LonAccel', 'G_Lat', 'G_Lon']:
         if col in df.columns:
             vals = pd.to_numeric(df[col], errors='coerce').fillna(0)
-            # If values look like m/s2 (abs max > 5), convert to G
+            target_name = col.replace('Accel', 'G').replace('G_', '') + ('G' if 'G' not in col else '')
+            # Normalization logic
             if vals.abs().max() > 5.0:
-                df[col.replace('Accel', 'G')] = vals / 9.81
+                df[target_name] = vals / 9.81
             else:
-                df[col.replace('Accel', 'G')] = vals
+                df[target_name] = vals
     
-    # Ensure columns exist even if not in CSV
+    # Force generic names for math consistency
+    if 'LatG' not in df.columns and 'Lat' in df.columns: df['LatG'] = df['Lat']
+    if 'LonG' not in df.columns and 'Lon' in df.columns: df['LonG'] = df['Lon']
     if 'LatG' not in df.columns: df['LatG'] = 0.0
     if 'LonG' not in df.columns: df['LonG'] = 0.0
 
-    # 3. Steering Normalization (Radians to Degrees Fix)
+    # 3. Steering Normalization (Radians vs Degrees check)
     if 'SteeringWheelAngle' in df.columns:
-        df['SteerDeg'] = pd.to_numeric(df['SteeringWheelAngle'], errors='coerce') * (180 / np.pi)
+        raw_steer = pd.to_numeric(df['SteeringWheelAngle'], errors='coerce')
+        if raw_steer.abs().max() < 10: # Likely Radians
+            df['SteerDeg'] = raw_steer * (180 / np.pi)
+        else:
+            df['SteerDeg'] = raw_steer
     else:
         df['SteerDeg'] = 0.0
 
@@ -77,14 +84,19 @@ def process_telemetry(df):
     return df.sort_values('Dist').reset_index(drop=True)
 
 def analyze_laps(df_d, df_b):
-    max_dist = df_b['Dist'].max()
+    max_dist = min(df_d['Dist'].max(), df_b['Dist'].max())
     grid = np.linspace(0, max_dist, 5000)
     
     def interp(df):
         out = pd.DataFrame({'Dist': grid})
         cols = ['Speed', 'Throttle', 'Brake', 'SteerDeg', 'LatG', 'LonG', 'ABSActive']
         for col in cols:
-            if col in df.columns: out[col] = np.interp(grid, df['Dist'], df[col])
+            search_col = col
+            if col not in df.columns: # Fallback for G naming
+                if col == 'LatG' and 'Lat' in df.columns: search_col = 'Lat'
+                if col == 'LonG' and 'Lon' in df.columns: search_col = 'Lon'
+            
+            if search_col in df.columns: out[col] = np.interp(grid, df['Dist'], df[search_col])
             else: out[col] = 0.0
         return out
         
@@ -100,25 +112,25 @@ def analyze_laps(df_d, df_b):
 
 def render_audit(res_d, res_b, grid, delta, profile):
     st.header("🏁 Universal Engineering Audit")
-    st.caption(f"Strategy: {profile['focus']}")
     
     # Logic Fix 2: Rolling Mean (50 samples) to kill steering noise
     steer_filt = res_d['SteerDeg'].rolling(window=50, center=True, min_periods=1).mean()
     
-    is_corner = np.abs(steer_filt) > 15
+    # Detection threshold (10 degrees)
+    is_corner = np.abs(steer_filt) > 10
     events = (is_corner != pd.Series(is_corner).shift()).cumsum()
     
     found_any = False
     audit_count = 0
+    
     for eid in events.unique():
         idx = events == eid
+        if not is_corner[idx].iloc[0]: continue
         
         # Logic Fix 2: Minimum Event Length (50 meters)
-        start_dist = grid[idx][0]
-        end_dist = grid[idx][-1]
-        dist_len = end_dist - start_dist
+        dist_len = grid[idx][-1] - grid[idx][0]
         
-        if is_corner[idx].iloc[0] and dist_len > 50.0:
+        if dist_len > 50.0:
             found_any = True
             audit_count += 1
             d_ev, b_ev = res_d[idx], res_b[idx]
@@ -127,13 +139,12 @@ def render_audit(res_d, res_b, grid, delta, profile):
             entry_abs = (d_ev['ABSActive'] > profile['abs_threshold']).any()
             exit_saw = np.abs(np.gradient(d_ev['Throttle'])).max() > 45
             
-            # Logic Fix 3: Tire Utilization Normalization (Cap 100%)
+            # Logic Fix 3: Tire Utilization Cap 100%
             raw_util = (np.sqrt(d_ev['LatG']**2 + d_ev['LonG']**2).max() / profile['friction_limit']) * 100
             util = min(raw_util, 100.0)
             
             # Logic Fix 4: V-Min 0.5 km/h threshold
-            v_min_d = d_ev['Speed'].min()
-            v_min_b = b_ev['Speed'].min()
+            v_min_d, v_min_b = d_ev['Speed'].min(), b_ev['Speed'].min()
             vmin_delta = v_min_d - v_min_b
             if abs(vmin_delta) < 0.5: vmin_delta = 0.0
             
@@ -142,21 +153,20 @@ def render_audit(res_d, res_b, grid, delta, profile):
                 with c2:
                     st.metric("Tire Util.", f"{util:.1f}%")
                     st.metric("V-Min Delta", f"{vmin_delta:.1f} km/h")
-                
                 with c1:
                     if entry_abs and exit_saw:
-                        st.markdown('<div class="critical-card"><strong>ROOT CAUSE: ENTRY INSTABILITY.</strong> Over-braked/Saturated assists. This ruined mid-corner platform.</div>', unsafe_allow_html=True)
+                        st.markdown('<div class="critical-card"><strong>ROOT CAUSE: ENTRY INSTABILITY.</strong> Over-braked entry saturated tires, causing exit corrections.</div>', unsafe_allow_html=True)
                     elif entry_abs:
-                        st.markdown('<div class="warning-card"><strong>ENTRY FAULT: ABS OVER-RELIANCE.</strong> Squeeze less peak pressure for better rotation.</div>', unsafe_allow_html=True)
+                        st.markdown('<div class="warning-card"><strong>ENTRY FAULT: ABS OVER-RELIANCE.</strong> Reduce peak pressure for better turn-in.</div>', unsafe_allow_html=True)
                     elif exit_saw:
-                        st.markdown('<div class="critical-card"><strong>EXIT FAULT: SAWTOOTH THROTTLE.</strong> Hold a steady maintenance throttle.</div>', unsafe_allow_html=True)
+                        st.markdown('<div class="critical-card"><strong>EXIT FAULT: SAWTOOTH THROTTLE.</strong> Entry was clean but platform unstable on power.</div>', unsafe_allow_html=True)
                     elif abs(vmin_delta) < 0.5:
-                        st.markdown('<div class="success-card"><strong>IDENTICAL PERFORMANCE.</strong> V-Min delta is negligible. Focus on line geometry.</div>', unsafe_allow_html=True)
+                        st.markdown('<div class="success-card"><strong>PERFECT PARITY.</strong> Speeds match benchmark. Look for time in line/geometry.</div>', unsafe_allow_html=True)
                     else:
-                        st.markdown('<div class="success-card"><strong>CLEAN INPUTS.</strong> Time loss is likely purely speed-carrying capacity.</div>', unsafe_allow_html=True)
+                        st.markdown('<div class="success-card"><strong>CLEAN INPUTS.</strong> Inputs are efficient. Closing the speed gap requires higher confidence.</div>', unsafe_allow_html=True)
 
     if not found_any:
-        st.info("No significant cornering events (>50m) detected with current steering thresholds.")
+        st.info("💡 **Engineer Note:** No significant corners detected. Ensure you are comparing two different laps and that steering input exceeds 10 degrees for at least 50 meters.")
 
 # --- 5. MAIN ---
 
@@ -172,26 +182,26 @@ def main():
         files = [f for f in os.listdir(DATA_DIR) if f.endswith('.csv')]
         files.sort()
         
-        d_file = st.selectbox("Driver Lap (Comparison)", files, index=0)
-        b_file = st.selectbox("Benchmark Lap (Baseline)", files, index=min(1, len(files)-1))
+        if len(files) < 2:
+            st.error("Need at least 2 CSV files in directory.")
+            st.stop()
 
-        # Logic Fix 1: Force File Uniqueness
+        d_file = st.selectbox("Driver Lap", files, index=0)
+        b_file = st.selectbox("Benchmark Lap", files, index=1)
+
+        # Logic Fix 1: Force File Uniqueness (Hard Stop)
         if d_file == b_file:
-            st.error("🚨 SELECT DIFFERENT LAPS FOR COMPARISON.")
+            st.error("🚨 **ERROR:** SELECT DIFFERENT LAPS.")
+            st.info("You are currently comparing a file to itself. No analysis can be performed.")
             st.stop()
 
     if d_file and b_file:
-        try:
-            df_d = process_telemetry(pd.read_csv(os.path.join(DATA_DIR, d_file)))
-            df_b = process_telemetry(pd.read_csv(os.path.join(DATA_DIR, b_file)))
-            res_d, res_b, grid, delta = analyze_laps(df_d, df_b)
-            
-            st.metric("Total Lap Delta", f"{delta[-1]:.3f}s", delta_color="inverse")
-            render_audit(res_d, res_b, grid, delta, profile)
-        except Exception as e:
-            st.error(f"Error processing files: {e}")
-    else:
-        st.info("Upload CSV files to begin.")
+        df_d = process_telemetry(pd.read_csv(os.path.join(DATA_DIR, d_file)))
+        df_b = process_telemetry(pd.read_csv(os.path.join(DATA_DIR, b_file)))
+        res_d, res_b, grid, delta = analyze_laps(df_d, df_b)
+        
+        st.metric("Total Lap Delta", f"{delta[-1]:.3f}s", delta_color="inverse")
+        render_audit(res_d, res_b, grid, delta, profile)
 
 if __name__ == "__main__":
     main()
