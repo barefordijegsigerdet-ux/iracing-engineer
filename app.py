@@ -3,26 +3,27 @@ import pandas as pd
 import numpy as np
 import os
 
-st.set_page_config(page_title="Race Engineer Pro | Final Precision", layout="wide")
+st.set_page_config(page_title="Race Engineer Pro | Precision v3.8", layout="wide")
 
 def clean_df(df):
+    # Standardize headers: lower case, remove spaces/underscores
     df.columns = df.columns.str.lower().str.replace(' ', '').str.replace('_', '')
     
-    # Expanded mapping for G61 CSV variations
     mapping = {
-        'dist': ['dist', 'lapdist', 'distance', 'lapdistpct'],
-        'time': ['time', 'sessiontime', 'laptime', 'elapsed', 'timestamp'],
-        'steer': ['steer', 'steeringwheelangle'],
-        'speed': ['speed', 'vel', 'velocity'],
-        'throttle': ['throttle', 'thr'],
+        'dist': ['dist', 'lapdist', 'distance', 'lapdistpct', 'pos'],
+        'time': ['time', 'sessiontime', 'laptime', 'elapsed', 'timestamp', 't'],
+        'steer': ['steer', 'steeringwheelangle', 'st'],
+        'speed': ['speed', 'vel', 'velocity', 'v'],
+        'throttle': ['throttle', 'thr', 'throt'],
         'brake': ['brake', 'brk'],
         'latg': ['lataccel', 'latg'],
-        'longg': ['longaccel', 'lonaccel'],
-        'abs': ['absactive', 'abs']
+        'longg': ['longaccel', 'lonaccel', 'longg'],
+        'abs': ['absactive', 'abs', 'abs_active']
     }
     
     clean_data = pd.DataFrame()
     for internal, options in mapping.items():
+        # Look for exact match or partial match
         match = [c for c in df.columns if any(opt == c for opt in options) or any(opt in c for opt in options)]
         if match:
             clean_data[internal] = pd.to_numeric(df[match[0]], errors='coerce').fillna(0)
@@ -50,9 +51,14 @@ def main():
         b_file = st.selectbox("Benchmark Lap", files, index=min(1, len(files)-1))
         if d_file == b_file: st.stop()
 
-    df_d = clean_df(pd.read_csv(os.path.join(DATA_DIR, d_file)))
-    df_b = clean_df(pd.read_csv(os.path.join(DATA_DIR, b_file)))
+    # Load Data
+    raw_d = pd.read_csv(os.path.join(DATA_DIR, d_file))
+    raw_b = pd.read_csv(os.path.join(DATA_DIR, b_file))
     
+    df_d = clean_df(raw_d)
+    df_b = clean_df(raw_b)
+    
+    # 5000 Point Alignment
     grid = np.linspace(0, df_b['dist'].max(), 5000)
     res_d, res_b = pd.DataFrame({'dist': grid}), pd.DataFrame({'dist': grid})
     
@@ -63,24 +69,28 @@ def main():
     # --- PRECISION DELTA LOGIC ---
     if res_d['time'].max() > 0:
         delta = pd.Series(res_d['time'] - res_b['time'])
-        st.sidebar.success("⏱️ Time-Sync: ACTIVE (Transponder Precision)")
+        st.sidebar.success("⏱️ Time-Sync: ACTIVE (Precision)")
     else:
+        # Fallback to integration
         v_d, v_b = np.maximum(res_d['speed'].values / 3.6, 1.0), np.maximum(res_b['speed'].values / 3.6, 1.0)
         delta = pd.Series(np.cumsum(np.diff(grid, prepend=0) / v_d - np.diff(grid, prepend=0) / v_b))
-        st.sidebar.warning("⚠️ Time-Sync: FAILED (Physics Integration Active)")
+        st.sidebar.warning("⚠️ Time-Sync: FAILED")
+        with st.sidebar.expander("Debug: CSV Headers"):
+            st.write(list(raw_d.columns))
 
     st.title("🏁 Precision Engineering Audit")
     st.metric("Total Lap Delta", f"{delta.iloc[-1]:.3f}s", delta_color="inverse")
     
-    # Audit Logic
+    # Audit Heuristics
     is_corner = np.abs(res_d['steer']).rolling(window=40, center=True).mean() > 15
     events = (is_corner.astype(int).diff().fillna(0) != 0).cumsum()
     
     for eid in events.unique():
         idx = (events == eid) & is_corner
-        if idx.any() and (grid[idx][-1] - grid[idx][0]) > 50:
+        if idx.any() and (grid[idx].iloc[-1] - grid[idx].iloc[0]) > 50:
             d_ev, b_ev = res_d[idx], res_b[idx]
             with st.expander(f"📍 Corner at {grid[idx].mean():.0f}m", expanded=True):
+                # Utilization Score
                 util = min((np.sqrt(d_ev['latg']**2 + d_ev['longg']**2).max() / 
                         np.sqrt(b_ev['latg']**2 + b_ev['longg']**2).max()) * 100, 100.0)
                 vmin_diff = d_ev['speed'].min() - b_ev['speed'].min()
