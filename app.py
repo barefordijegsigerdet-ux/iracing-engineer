@@ -1,49 +1,51 @@
+# app.py - Race Engineer Pro v5.0
 import streamlit as st
 import pandas as pd
 import numpy as np
 import os
+import google.generativeai as genai
 
-st.set_page_config(page_title="Race Engineer Pro | Sector Audit", layout="wide")
+st.set_page_config(page_title="Race Engineer Pro", layout="wide", page_icon="🏁")
+
+# ── GEMINI SETUP ───────────────────────────────────────────────────────────────
+genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+model = genai.GenerativeModel("gemini-1.5-flash")
 
 # ── STYLING ────────────────────────────────────────────────────────────────────
-DARK_BG  = "#0e1117"
-CARD_BG  = "#1a1d27"
-ACCENT   = "#e8002d"
-
 def inject_css():
-    st.markdown(f"""
+    st.markdown("""
     <style>
-        .main {{ background-color: {DARK_BG}; color: white; }}
-        .fault-card {{
-            background-color: {CARD_BG};
-            border-left: 4px solid {ACCENT};
+        .main { background-color: #0e1117; color: white; }
+        .fault-card {
+            background-color: #1a1d27;
+            border-left: 4px solid #e8002d;
             padding: 12px 16px;
             border-radius: 4px;
             margin: 8px 0;
-        }}
-        .warn-card {{
-            background-color: {CARD_BG};
+        }
+        .warn-card {
+            background-color: #1a1d27;
             border-left: 4px solid #f0a500;
             padding: 12px 16px;
             border-radius: 4px;
             margin: 8px 0;
-        }}
-        .ok-card {{
-            background-color: {CARD_BG};
+        }
+        .ok-card {
+            background-color: #1a1d27;
             border-left: 4px solid #00c46a;
             padding: 12px 16px;
             border-radius: 4px;
             margin: 8px 0;
-        }}
-        .verdict-card {{
+        }
+        .verdict-card {
             background-color: #12151f;
             border: 1px solid #2e3147;
-            border-top: 4px solid {ACCENT};
+            border-top: 4px solid #e8002d;
             padding: 16px;
             border-radius: 6px;
             margin: 12px 0;
-        }}
-        .section-header {{
+        }
+        .section-header {
             font-size: 1.1rem;
             font-weight: 700;
             color: #ffffff;
@@ -51,18 +53,111 @@ def inject_css():
             margin-bottom: 4px;
             border-bottom: 1px solid #2e3147;
             padding-bottom: 4px;
-        }}
+        }
+        .coming-soon {
+            background-color: #1a1d27;
+            border: 2px dashed #2e3147;
+            padding: 40px;
+            border-radius: 8px;
+            text-align: center;
+            color: #666;
+        }
     </style>
     """, unsafe_allow_html=True)
 
-def fault_card(msg):   st.markdown(f'<div class="fault-card">🔴 {msg}</div>',   unsafe_allow_html=True)
-def warn_card(msg):    st.markdown(f'<div class="warn-card">🟡 {msg}</div>',    unsafe_allow_html=True)
-def ok_card(msg):      st.markdown(f'<div class="ok-card">🟢 {msg}</div>',      unsafe_allow_html=True)
-def verdict_card(msg): st.markdown(f'<div class="verdict-card">{msg}</div>',    unsafe_allow_html=True)
-def section_header(msg): st.markdown(f'<div class="section-header">{msg}</div>', unsafe_allow_html=True)
+def fault_card(msg):    st.markdown(f'<div class="fault-card">🔴 {msg}</div>', unsafe_allow_html=True)
+def warn_card(msg):     st.markdown(f'<div class="warn-card">🟡 {msg}</div>', unsafe_allow_html=True)
+def ok_card(msg):       st.markdown(f'<div class="ok-card">🟢 {msg}</div>', unsafe_allow_html=True)
+def verdict_card(msg):  st.markdown(f'<div class="verdict-card">{msg}</div>', unsafe_allow_html=True)
+def section_header(msg):st.markdown(f'<div class="section-header">{msg}</div>', unsafe_allow_html=True)
+
+# ── CAR & TRACK DEFINITIONS ────────────────────────────────────────────────────
+CARS = [
+    "Porsche 911 GT3 Cup (992.2)",
+    "Porsche 911 GT3 R (992)",
+    "Ferrari 296 GT3",
+    "Lamborghini Huracán GT3 EVO2",
+    "BMW M4 GT3",
+    "Mercedes-AMG GT3 2020",
+    "Audi R8 LMS EVO II GT3",
+    "McLaren 720S GT3 EVO",
+    "Other (type below)",
+]
+
+TRACKS = {
+    "Circuit Zandvoort (GP)": {
+        "length_m": 4259,
+        "sectors": [
+            {"name": "Sector 1 (Start – T3)",    "start": 0,    "end": 1150},
+            {"name": "Sector 2 (T4 – T10)",      "start": 1150, "end": 2750},
+            {"name": "Sector 3 (Chicane – End)", "start": 2750, "end": 4259},
+        ],
+        "corners": [
+            ("T1 Tarzanbocht",     280,  80),
+            ("T3 Hugenholtzbocht", 800,  80),
+            ("T4 Scheivlak",      1150,  70),
+            ("T5",                1400,  70),
+            ("T7 Audi S",         1750,  80),
+            ("T9 Arie Luyendijk", 2100,  80),
+            ("T11 Vodafone",      2550,  80),
+            ("T13 Chicane Entry", 2850,  70),
+            ("T14 Chicane Exit",  2980,  70),
+        ]
+    },
+    "Spa-Francorchamps":  {
+        "length_m": 7004,
+        "sectors": [
+            {"name": "Sector 1 (Start – Eau Rouge)", "start": 0,    "end": 2000},
+            {"name": "Sector 2 (Kemmel – Stavelot)",  "start": 2000, "end": 5000},
+            {"name": "Sector 3 (Pouhon – Finish)",    "start": 5000, "end": 7004},
+        ],
+        "corners": [
+            ("T1 La Source",   180,  80),
+            ("Eau Rouge",      750,  80),
+            ("Raidillon",      900,  80),
+            ("Kemmel",        1800,  80),
+            ("Les Combes",    2200,  80),
+            ("Malmedy",       2600,  70),
+            ("Rivage",        3200,  80),
+            ("Pouhon",        4200,  80),
+            ("Fagnes",        4800,  70),
+            ("Stavelot",      5200,  80),
+            ("Blanchimont",   6000,  80),
+            ("Bus Stop",      6600,  70),
+        ]
+    },
+    "Nürburgring GP": {
+        "length_m": 5148,
+        "sectors": [
+            {"name": "Sector 1 (Start – T6)",    "start": 0,    "end": 1800},
+            {"name": "Sector 2 (T7 – T13)",      "start": 1800, "end": 3600},
+            {"name": "Sector 3 (T14 – Finish)",  "start": 3600, "end": 5148},
+        ],
+        "corners": [
+            ("T1 Mercedes",   350,  80),
+            ("T2",            600,  70),
+            ("T4 Ford",      1100,  80),
+            ("T6 Dunlop",    1700,  80),
+            ("T8",           2200,  80),
+            ("T11",          2800,  80),
+            ("T13",          3500,  80),
+            ("T14",          3800,  80),
+            ("T16 Veedol",   4500,  80),
+        ]
+    },
+    "Other (type below)": {
+        "length_m": 4000,
+        "sectors": [
+            {"name": "Sector 1", "start": 0,    "end": 1333},
+            {"name": "Sector 2", "start": 1333, "end": 2666},
+            {"name": "Sector 3", "start": 2666, "end": 4000},
+        ],
+        "corners": []
+    }
+}
 
 # ── DATA INGESTION ─────────────────────────────────────────────────────────────
-def clean_df(df):
+def clean_df(df, track_length_m=4259):
     df.columns = df.columns.str.lower().str.replace(' ', '').str.replace('_', '')
     mapping = {
         'dist':     ['dist', 'lapdist', 'distance', 'lapdistpct'],
@@ -76,17 +171,15 @@ def clean_df(df):
     }
     clean_data = pd.DataFrame()
     for internal, options in mapping.items():
-        match = [
-            c for c in df.columns
-            if any(opt == c for opt in options) or any(opt in c for opt in options)
-        ]
+        match = [c for c in df.columns
+                 if any(opt == c for opt in options) or any(opt in c for opt in options)]
         if match:
             clean_data[internal] = pd.to_numeric(df[match[0]], errors='coerce').fillna(0)
         else:
             clean_data[internal] = 0.0
 
     if clean_data['dist'].max() <= 1.1:
-        clean_data['dist'] *= 4259
+        clean_data['dist'] *= track_length_m
     if clean_data['steer'].abs().max() < 6.28:
         clean_data['steer'] *= (180 / np.pi)
     for g in ['latg', 'longg']:
@@ -97,16 +190,8 @@ def clean_df(df):
 
     return clean_data.sort_values('dist').reset_index(drop=True)
 
-# ── INTERPOLATION GRID ─────────────────────────────────────────────────────────
-# FIX 1: Increased to 10000 points to reduce cumulative delta drift.
-# ds minimum clamped to avoid near-zero division artifacts at lap boundaries.
 def build_grid(df_d, df_b, n=10000):
-    """
-    Uses the benchmark lap distance as the master grid reference.
-    Driver data is interpolated onto this grid so both laps share
-    identical distance axis — prerequisite for accurate delta calculation.
-    """
-    grid = np.linspace(0, df_b['dist'].max(), n)
+    grid  = np.linspace(0, df_b['dist'].max(), n)
     res_d = pd.DataFrame({'dist': grid})
     res_b = pd.DataFrame({'dist': grid})
     for col in ['speed', 'throttle', 'brake', 'steer', 'latg', 'longg', 'abs']:
@@ -114,51 +199,32 @@ def build_grid(df_d, df_b, n=10000):
         res_b[col] = np.interp(grid, df_b['dist'], df_b[col])
     return grid, res_d, res_b
 
-# ── DELTA CALCULATION ──────────────────────────────────────────────────────────
 def calc_delta(grid, res_d, res_b):
-    """
-    Δt = Σ(ds/v_d - ds/v_b)
-    ds clamped to minimum 0.01m to prevent division artifacts
-    at the lap start boundary where prepend=0 creates a zero interval.
-    """
     v_d = np.maximum(res_d['speed'].values / 3.6, 1.0)
     v_b = np.maximum(res_b['speed'].values / 3.6, 1.0)
     ds  = np.maximum(np.diff(grid, prepend=grid[0]), 0.01)
     return pd.Series(np.cumsum(ds / v_d - ds / v_b))
 
 # ── ABS EVENT MERGER ───────────────────────────────────────────────────────────
-# FIX 2: Merges fragmented ABS micro-events into real braking zones.
-# Events within MERGE_GAP_M metres of each other are collapsed into one.
 def merge_abs_events(event_starts, event_ends, dist_array, merge_gap_m=25.0):
-    """
-    Physics rationale: ABS does not fire as 19 separate events.
-    The brake system pulses at ~10Hz — each pulse appears as a micro-event
-    in the telemetry. These pulses within a single brake application
-    must be treated as one event to calculate meaningful ramp rates
-    and total time cost per braking zone.
-    """
     if len(event_starts) == 0:
         return [], []
-
     merged_starts = [event_starts[0]]
     merged_ends   = [event_ends[0]]
-
     for i in range(1, len(event_starts)):
         gap = dist_array[event_starts[i]] - dist_array[merged_ends[-1]]
         if gap <= merge_gap_m:
-            # Extend current zone to absorb this event
             merged_ends[-1] = event_ends[i]
         else:
             merged_starts.append(event_starts[i])
             merged_ends.append(event_ends[i])
-
     return merged_starts, merged_ends
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MODULE A — ABS AUDIT
 # ══════════════════════════════════════════════════════════════════════════════
 def abs_audit(grid, res_d, res_b, sec_mask, sec_name):
-    section_header("MODULE A — ABS Saturation Audit")
+    section_header("ABS Check")
 
     abs_signal = res_d['abs'].values[sec_mask]
     dist_sec   = grid[sec_mask]
@@ -170,155 +236,113 @@ def abs_audit(grid, res_d, res_b, sec_mask, sec_name):
     abs_binary  = (abs_signal > 0.5).astype(int)
     transitions = np.diff(abs_binary, prepend=0, append=0)
     raw_starts  = np.where(transitions ==  1)[0]
-    raw_ends    = np.where(transitions == -1)[0]
+    raw_ends    = np.minimum(np.where(transitions == -1)[0], len(dist_sec) - 1)
 
-    # Clip ends to array bounds
-    raw_ends = np.minimum(raw_ends, len(dist_sec) - 1)
-
-    abs_dist_total = float(np.sum(
-        np.diff(dist_sec, prepend=dist_sec[0]) * abs_binary
-    ))
+    abs_dist_total = float(np.sum(np.diff(dist_sec, prepend=dist_sec[0]) * abs_binary))
 
     if len(raw_starts) == 0:
-        ok_card(f"No ABS events in {sec_name}. Brake application within tire limits.")
+        ok_card(f"Clean braking in {sec_name}. ABS isn't being triggered — nice.")
         return 0.0
 
-    # FIX 2 applied: merge micro-events into braking zones
-    merged_starts, merged_ends = merge_abs_events(
-        raw_starts, raw_ends, dist_sec, merge_gap_m=25.0
-    )
-
-    raw_count    = len(raw_starts)
+    merged_starts, merged_ends = merge_abs_events(raw_starts, raw_ends, dist_sec, merge_gap_m=25.0)
     merged_count = len(merged_starts)
 
-    st.markdown(
-        f"**{raw_count} raw ABS pulses → merged into "
-        f"{merged_count} braking zone(s) | "
-        f"Total ABS distance: {abs_dist_total:.1f}m**"
-    )
+    st.markdown(f"**{merged_count} braking zone(s) with ABS | {abs_dist_total:.1f}m total scrubbing**")
 
     total_time_lost = 0.0
 
     for i, (es, ee) in enumerate(zip(merged_starts, merged_ends)):
         ee = min(ee, len(dist_sec) - 1)
-
         zone_dist_start = dist_sec[es]
-        zone_dist_end   = dist_sec[ee]
-        zone_length     = zone_dist_end - zone_dist_start
+        zone_length     = dist_sec[ee] - zone_dist_start
 
-        # Time lost during zone
         ds_zone  = np.maximum(np.diff(dist_sec[es:ee+1], prepend=dist_sec[es]), 0.01)
         v_d_zone = np.maximum(speed_d[es:ee+1], 1.0)
         v_b_zone = np.maximum(speed_b[es:ee+1], 1.0)
         t_lost   = float(np.sum(ds_zone * (1.0/v_d_zone - 1.0/v_b_zone)))
         total_time_lost += t_lost
 
-        # Ramp rate: search backwards up to 200 points for true brake onset
         onset_idx = es
         for j in range(es, max(es - 200, 0), -1):
             if brake_d[j] < 5.0:
                 onset_idx = j
                 break
-        ramp_dist_d = max(dist_sec[es] - dist_sec[onset_idx], 2.0)
-        ramp_rate_d = brake_d[es] / ramp_dist_d
+        ramp_dist_d  = max(dist_sec[es] - dist_sec[onset_idx], 2.0)
+        ramp_rate_d  = brake_d[es] / ramp_dist_d
 
         b_onset_idx = es
         for j in range(es, max(es - 200, 0), -1):
             if brake_b[j] < 5.0:
                 b_onset_idx = j
                 break
-        ramp_dist_b = max(dist_sec[es] - dist_sec[b_onset_idx], 2.0)
-        ramp_rate_b = max(brake_b[es] / ramp_dist_b, 0.01)
-
+        ramp_dist_b  = max(dist_sec[es] - dist_sec[b_onset_idx], 2.0)
+        ramp_rate_b  = max(brake_b[es] / ramp_dist_b, 0.01)
         aggression_ratio = ramp_rate_d / ramp_rate_b
 
-        # Peak brake pressure in zone
-        peak_brake_d = float(np.max(brake_d[es:ee+1]))
-        peak_brake_b = float(np.max(brake_b[es:ee+1]))
+        peak_brake_delta = float(np.max(brake_d[es:ee+1])) - float(np.max(brake_b[es:ee+1]))
 
         cols = st.columns(5)
-        cols[0].metric("Zone Start",    f"{zone_dist_start:.0f}m")
-        cols[1].metric("Zone Length",   f"{zone_length:.1f}m")
+        cols[0].metric("Where",         f"{zone_dist_start:.0f}m")
+        cols[1].metric("Length",        f"{zone_length:.1f}m")
         cols[2].metric("Time Lost",     f"{t_lost:+.3f}s")
-        cols[3].metric("Ramp Ratio",    f"{aggression_ratio:.2f}x",
-                       delta="vs benchmark", delta_color="inverse")
-        cols[4].metric("Peak Brake Δ",  f"{peak_brake_d - peak_brake_b:+.0f}%")
+        cols[3].metric("How Aggressive",f"{aggression_ratio:.2f}x")
+        cols[4].metric("Peak Brake Δ",  f"{peak_brake_delta:+.0f}%")
 
         if aggression_ratio > 1.4:
             fault_card(
-                f"Zone {i+1} @ {zone_dist_start:.0f}m — {zone_length:.0f}m of ABS scrubbing. "
-                f"Ramp rate {aggression_ratio:.1f}x benchmark. "
-                f"You are loading the pedal over {ramp_dist_d:.0f}m, "
-                f"benchmark builds over {ramp_dist_b:.0f}m. "
-                f"Physical fix: Move brake marker {min(int((ramp_dist_d - ramp_dist_b) * 0.5), 15)}m "
-                f"later and build to peak pressure over {ramp_dist_b * 1.2:.0f}m. "
-                f"Initial pedal load should be 60% of peak, not 100%."
+                f"Zone {i+1} at {zone_dist_start:.0f}m — you're stabbing the brake "
+                f"{aggression_ratio:.1f}x harder than you need to. "
+                f"That's {zone_length:.0f}m of the tire skidding instead of braking. "
+                f"Fix: Hit the brake later and build pressure over {ramp_dist_b * 1.2:.0f}m. "
+                f"Start at 60% pressure, not 100%."
             )
         elif aggression_ratio > 1.15:
             warn_card(
-                f"Zone {i+1} @ {zone_dist_start:.0f}m — Marginally aggressive ramp "
-                f"({aggression_ratio:.2f}x). Reduce initial pedal load ~15%. "
-                f"Zone length {zone_length:.0f}m."
+                f"Zone {i+1} at {zone_dist_start:.0f}m — a bit aggressive on the pedal "
+                f"({aggression_ratio:.2f}x). Back it off about 15% on initial application."
             )
         else:
             warn_card(
-                f"Zone {i+1} @ {zone_dist_start:.0f}m — Ramp rate matches benchmark "
-                f"({aggression_ratio:.2f}x) but ABS still firing over {zone_length:.0f}m. "
-                f"Likely cause: brake bias too far forward. "
-                f"Shift bias 1 click rearward and retest."
+                f"Zone {i+1} at {zone_dist_start:.0f}m — your brake application is "
+                f"actually fine, but ABS is still firing. "
+                f"Brake bias might be too far forward. Try shifting it 1 click rearward."
             )
 
     fault_card(
-        f"TOTAL ABS COST — {sec_name}: {total_time_lost:+.3f}s across "
-        f"{merged_count} braking zone(s) | {abs_dist_total:.1f}m scrubbing. "
-        f"Tires cannot generate cornering force during ABS activation. "
-        f"This time is non-recoverable within the braking zone itself."
+        f"Total braking cost in {sec_name}: {total_time_lost:+.3f}s — "
+        f"{abs_dist_total:.1f}m where the tires were sliding instead of working."
     )
-
     return total_time_lost
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MODULE B — THROTTLE DISCIPLINE
 # ══════════════════════════════════════════════════════════════════════════════
 def throttle_discipline(grid, res_d, res_b, sec_mask, sec_name):
-    section_header("MODULE B — Throttle Discipline Audit")
+    section_header("Throttle Check")
 
     thr_d    = res_d['throttle'].values[sec_mask]
     thr_b    = res_b['throttle'].values[sec_mask]
     spd_d    = res_d['speed'].values[sec_mask]
     dist_sec = grid[sec_mask]
 
-    # FIX 3: Lowered threshold from 20% to 10% to capture partial throttle exits
-    # Physics basis: on rear-engine car, sawtooth begins at first throttle
-    # application, not at wide-open-throttle. 10% captures the critical
-    # weight-transfer initiation phase.
     EXIT_THRESHOLD   = 10.0
     NOISE_THRESHOLD  = 3.0
     REVERSAL_PENALTY = 0.025
 
-    b_above  = (thr_b > EXIT_THRESHOLD).astype(int)
-    b_trans  = np.diff(b_above, prepend=0)
+    b_above     = (thr_b > EXIT_THRESHOLD).astype(int)
+    b_trans     = np.diff(b_above, prepend=0)
     exit_starts = np.where(b_trans ==  1)[0]
     exit_ends   = np.where(b_trans == -1)[0]
 
     if len(exit_ends) < len(exit_starts):
         exit_ends = np.append(exit_ends, len(dist_sec) - 1)
 
-    # Filter: minimum zone length 30m to exclude glitches
     valid = [(s, e) for s, e in zip(exit_starts, exit_ends)
              if dist_sec[min(e, len(dist_sec)-1)] - dist_sec[s] >= 30.0]
 
     if not valid:
-        warn_card(
-            "No exit zones detected. Possible causes: "
-            "throttle channel mapped incorrectly, or benchmark never "
-            "exceeds 10% throttle in this sector (unusual — check CSV headers)."
-        )
+        warn_card("No throttle exit zones found in this sector. Check your CSV file.")
         return 0.0
-
-    total_reversals_d = 0
-    total_reversals_b = 0
-    total_est_cost    = 0.0
 
     def count_reversals(signal, threshold):
         diff      = np.diff(signal)
@@ -327,6 +351,10 @@ def throttle_discipline(grid, res_d, res_b, sec_mask, sec_name):
         if len(direction) < 2:
             return 0
         return int(np.sum(np.diff(direction) != 0))
+
+    total_reversals_d = 0
+    total_reversals_b = 0
+    total_est_cost    = 0.0
 
     for i, (es, ee) in enumerate(valid):
         ee = min(ee, len(dist_sec) - 1)
@@ -343,8 +371,8 @@ def throttle_discipline(grid, res_d, res_b, sec_mask, sec_name):
         total_reversals_d += rev_d
         total_reversals_b += rev_b
 
-        var_d = float(np.var(np.diff(zone_d)))
-        var_b = float(np.var(np.diff(zone_b))) + 1e-6
+        var_d          = float(np.var(np.diff(zone_d)))
+        var_b          = float(np.var(np.diff(zone_b))) + 1e-6
         variance_ratio = var_d / var_b
 
         if np.std(zone_d) > 0.1 and np.std(zone_spd) > 0.1:
@@ -360,20 +388,17 @@ def throttle_discipline(grid, res_d, res_b, sec_mask, sec_name):
         est_cost = rev_d * REVERSAL_PENALTY
         total_est_cost += est_cost
 
-        st.markdown(
-            f"**Exit Zone {i+1} | "
-            f"{zone_dist[0]:.0f}m → {zone_dist[-1]:.0f}m**"
-        )
+        st.markdown(f"**Exit Zone {i+1} | {zone_dist[0]:.0f}m → {zone_dist[-1]:.0f}m**")
         cols = st.columns(4)
-        cols[0].metric("Your Reversals",      str(rev_d))
-        cols[1].metric("Bench Reversals",     str(rev_b))
-        cols[2].metric("Variance Ratio",      f"{variance_ratio:.2f}x")
-        cols[3].metric("Thr–Speed Corr",      f"{corr:.2f}")
+        cols[0].metric("Your Lifts",      str(rev_d))
+        cols[1].metric("Benchmark Lifts", str(rev_b))
+        cols[2].metric("Smoothness",      f"{variance_ratio:.2f}x noisier")
+        cols[3].metric("Throttle-Speed",  f"{corr:.2f}")
 
         if commit_d is not None and commit_b is not None:
             commit_delta = commit_d - commit_b
             st.metric(
-                "Distance to 80% Throttle",
+                "Distance to full throttle",
                 f"You: {commit_d:.0f}m | Benchmark: {commit_b:.0f}m",
                 delta=f"{commit_delta:+.0f}m",
                 delta_color="inverse"
@@ -381,166 +406,109 @@ def throttle_discipline(grid, res_d, res_b, sec_mask, sec_name):
 
         if rev_d > rev_b + 2:
             fault_card(
-                f"Zone {i+1} @ {zone_dist[0]:.0f}m: SAWTOOTH — {rev_d} reversals "
-                f"vs benchmark {rev_b}. Variance {variance_ratio:.1f}x. "
-                f"Est. cost: {est_cost:.2f}s. "
-                f"Physical fix — 992 GT3 exit protocol: "
-                f"(1) Zero throttle through apex. "
-                f"(2) 0→30% as nose points at exit kerb. "
-                f"(3) 30→70% only when steering is unwinding. "
-                f"(4) 70→100% when car is straight. "
-                f"Any reversal in steps 2–3 unloads rear axle and resets the sequence."
+                f"Zone {i+1} at {zone_dist[0]:.0f}m — you're lifting off the throttle "
+                f"{rev_d} times where the benchmark does it {rev_b} times. "
+                f"That's costing you ~{est_cost:.2f}s right there. "
+                f"On this car, every time you lift, the rear unsettles and you lose the exit. "
+                f"Fix: Squeeze it in stages — 30% at apex, 70% when unwinding, "
+                f"100% when straight. No lifting once you've started."
             )
         elif variance_ratio > 1.8:
             warn_card(
-                f"Zone {i+1}: Noisy throttle ({variance_ratio:.1f}x variance), "
-                f"low reversal count. Micro-lifts under aero load. "
-                f"Fix: Concentrate on foot pressure not pedal position. "
-                f"A consistent squeeze is more important than the exact value."
+                f"Zone {i+1} — not many full lifts but your throttle foot is nervous. "
+                f"{variance_ratio:.1f}x more movement than the benchmark. "
+                f"Relax your foot and commit to a smooth squeeze."
             )
         else:
-            ok_card(
-                f"Zone {i+1}: Throttle discipline within benchmark range."
-            )
+            ok_card(f"Zone {i+1} — clean exit. That's what it should look like.")
 
     if total_reversals_d > total_reversals_b + 3:
         fault_card(
-            f"SECTOR THROTTLE TOTAL — {total_reversals_d} reversals vs "
-            f"benchmark {total_reversals_b}. Est. cost: {total_est_cost:.2f}s. "
-            f"This is a rhythm fault across the whole sector, not one corner. "
-            f"Root cause on rear-engine car: reactive driving. "
-            f"You are responding to what the car does rather than commanding it. "
-            f"Fixing apex speed (Module C) will reduce this symptom automatically."
+            f"Across the whole {sec_name} — {total_reversals_d} throttle lifts vs "
+            f"benchmark's {total_reversals_b}. Est. cost: {total_est_cost:.2f}s. "
+            f"This isn't a one-corner problem, it's a habit. "
+            f"The fix starts with trusting your apex speed more — "
+            f"sort the braking first and the throttle will follow."
         )
 
     return total_est_cost
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MODULE C — CORNER MINIMUM SPEED AUDIT
+# MODULE C — APEX SPEED AUDIT
 # ══════════════════════════════════════════════════════════════════════════════
-ZANDVOORT_CORNERS = [
-    ("T1 Tarzanbocht",       280,  80),
-    ("T3 Hugenholtzbocht",   800,  80),
-    ("T4 Scheivlak",        1150,  70),
-    ("T5",                  1400,  70),
-    ("T7 Audi S",           1750,  80),
-    ("T9 Arie Luyendijk",   2100,  80),
-    ("T11 Vodafone",        2550,  80),
-    ("T13 Chicane Entry",   2850,  70),
-    ("T14 Chicane Exit",    2980,  70),
-]
-
-def corner_min_speed(grid, res_d, res_b, sec_mask, sec_name):
-    section_header("MODULE C — Corner Apex Speed Audit")
+def corner_min_speed(grid, res_d, res_b, sec_mask, sec_name, corners):
+    section_header("Corner Speed Check")
 
     dist_sec  = grid[sec_mask]
     spd_d_sec = res_d['speed'].values[sec_mask]
     spd_b_sec = res_b['speed'].values[sec_mask]
 
-    STRAIGHT_M     = 200.0
+    STRAIGHT_M      = 200.0
     total_apex_cost = 0.0
 
     corners_in_sector = []
-    for c in ZANDVOORT_CORNERS:
-        idx = np.searchsorted(grid, c[1], side='left')
-        idx = int(np.clip(idx, 0, len(grid) - 1))
+    for c in corners:
+        idx = int(np.clip(np.searchsorted(grid, c[1], side='left'), 0, len(grid) - 1))
         if sec_mask[idx]:
             corners_in_sector.append(c)
 
     if not corners_in_sector:
-        warn_card("No defined corners in this sector range.")
+        warn_card("No corners mapped for this sector yet.")
         return 0.0
 
     for corner_name, apex_dist, window in corners_in_sector:
-        lo       = apex_dist - window
-        hi       = apex_dist + window
-        win_mask = (dist_sec >= lo) & (dist_sec <= hi)
-
+        win_mask = (dist_sec >= apex_dist - window) & (dist_sec <= apex_dist + window)
         if win_mask.sum() < 3:
             continue
 
-        win_spd_d = spd_d_sec[win_mask]
-        win_spd_b = spd_b_sec[win_mask]
-
-        apex_spd_d = float(np.min(win_spd_d))
-        apex_spd_b = float(np.min(win_spd_b))
+        apex_spd_d = float(np.min(spd_d_sec[win_mask]))
+        apex_spd_b = float(np.min(spd_b_sec[win_mask]))
         apex_diff  = apex_spd_d - apex_spd_b
 
-        v_d_ms = max(apex_spd_d / 3.6, 1.0)
-        v_b_ms = max(apex_spd_b / 3.6, 1.0)
+        v_d_ms        = max(apex_spd_d / 3.6, 1.0)
+        v_b_ms        = max(apex_spd_b / 3.6, 1.0)
         straight_cost = STRAIGHT_M * (1.0/v_d_ms - 1.0/v_b_ms)
         total_apex_cost += max(straight_cost, 0.0)
 
-        # Braking threshold comparison
-        pre_mask = (dist_sec >= lo - 150) & (dist_sec < lo)
-        if pre_mask.sum() > 3:
-            spd_pre_d = spd_d_sec[pre_mask]
-            spd_pre_b = spd_b_sec[pre_mask]
-            dist_pre  = dist_sec[pre_mask]
-            thr_d_idx = np.where(spd_pre_d < apex_spd_d * 1.15)[0]
-            thr_b_idx = np.where(spd_pre_b < apex_spd_b * 1.15)[0]
-            brake_dist_d = float(dist_pre[thr_d_idx[0]])  if len(thr_d_idx) > 0 else None
-            brake_dist_b = float(dist_pre[thr_b_idx[0]])  if len(thr_b_idx) > 0 else None
-        else:
-            brake_dist_d = brake_dist_b = None
-
-        st.markdown(f"**{corner_name} | Apex ~{apex_dist}m**")
+        st.markdown(f"**{corner_name}**")
         cols = st.columns(4)
         cols[0].metric("Your Apex Speed",  f"{apex_spd_d:.1f} km/h")
         cols[1].metric("Benchmark Apex",   f"{apex_spd_b:.1f} km/h")
-        cols[2].metric("Speed Deficit",    f"{apex_diff:+.1f} km/h",
-                       delta_color="inverse")
-        cols[3].metric("Straight Cost",    f"{straight_cost:+.3f}s")
-
-        if brake_dist_d is not None and brake_dist_b is not None:
-            bd_delta = brake_dist_d - brake_dist_b
-            st.metric(
-                "Braking Threshold vs Benchmark",
-                f"You: {brake_dist_d:.0f}m | Benchmark: {brake_dist_b:.0f}m",
-                delta=f"{bd_delta:+.0f}m",
-                delta_color="normal"
-            )
+        cols[2].metric("Difference",       f"{apex_diff:+.1f} km/h", delta_color="inverse")
+        cols[3].metric("Cost on exit",     f"{straight_cost:+.3f}s")
 
         if apex_diff < -8.0:
             fault_card(
-                f"{corner_name}: {apex_diff:.1f} km/h apex deficit. "
-                f"Compounding {straight_cost:.3f}s onto following straight. "
-                f"Root cause: ABS scrub killed tire rotation on entry, "
-                f"forcing you to apex at reduced speed. "
-                f"Fix: Release brake 10–15m earlier than current point. "
-                f"The 992 GT3 rear axle loads under deceleration — "
-                f"brake release IS your rotation tool. "
-                f"Hold trail-brake through apex rather than releasing fully."
+                f"{corner_name} — you're {abs(apex_diff):.1f} km/h slower through the apex "
+                f"and that's costing {straight_cost:.3f}s on the straight alone. "
+                f"The braking is killing your rotation. "
+                f"Release the brake 10–15m earlier and let the car rotate. "
+                f"Don't hold the brake through the apex — that's what's slowing you down."
             )
         elif apex_diff < -4.0:
             warn_card(
-                f"{corner_name}: {apex_diff:.1f} km/h deficit. "
-                f"Cost {straight_cost:.3f}s. "
-                f"Likely hesitation at turn-in or early apex. "
-                f"Fix: Move brake release 5m earlier."
+                f"{corner_name} — {abs(apex_diff):.1f} km/h off the benchmark. "
+                f"Costs {straight_cost:.3f}s. Try releasing the brake 5m earlier at turn-in."
             )
         elif apex_diff < -1.5:
             warn_card(
-                f"{corner_name}: Minor deficit {apex_diff:.1f} km/h. "
-                f"Check throttle pick-up timing on exit."
+                f"{corner_name} — small deficit of {abs(apex_diff):.1f} km/h. "
+                f"Worth checking your throttle pick-up timing on the exit."
             )
         else:
-            ok_card(
-                f"{corner_name}: Apex speed matches benchmark (Δ{apex_diff:+.1f} km/h)."
-            )
+            ok_card(f"{corner_name} — apex speed is right on benchmark. Good.")
 
     fault_card(
-        f"TOTAL APEX COMPOUNDING COST — {sec_name}: {total_apex_cost:+.3f}s. "
-        f"Shares root cause with ABS events — both are entry technique faults."
+        f"Total apex speed cost across {sec_name}: {total_apex_cost:+.3f}s — "
+        f"this compounds onto every straight after each corner."
     )
-
     return total_apex_cost
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TIME THIEF
 # ══════════════════════════════════════════════════════════════════════════════
 def time_thief_summary(grid, res_d, res_b, delta, sec_mask):
-    section_header("TIME THIEF — Peak Loss Point")
+    section_header("Biggest Loss Point")
 
     sec_delta_val = float(delta[sec_mask].iloc[-1] - delta[sec_mask].iloc[0])
     sec_slopes    = np.gradient(delta.values[sec_mask])
@@ -551,74 +519,504 @@ def time_thief_summary(grid, res_d, res_b, delta, sec_mask):
     b_pt = res_b[sec_mask].iloc[thief_idx]
 
     cols = st.columns(4)
-    cols[0].metric("Sector Delta",  f"{sec_delta_val:+.3f}s")
-    cols[1].metric("Loss Point",    f"{thief_dist:.0f}m")
-    cols[2].metric("Speed Diff",    f"{d_pt['speed'] - b_pt['speed']:.1f} km/h")
-    cols[3].metric("ABS Active",    "YES" if d_pt['abs'] > 0.5 else "NO")
+    cols[0].metric("Sector Time",  f"{sec_delta_val:+.3f}s")
+    cols[1].metric("Where",        f"{thief_dist:.0f}m")
+    cols[2].metric("Speed Gap",    f"{d_pt['speed'] - b_pt['speed']:.1f} km/h")
+    cols[3].metric("ABS Active",   "YES" if d_pt['abs'] > 0.5 else "NO")
 
     if d_pt['abs'] > 0.5:
         fault_card(
-            f"Primary Time Thief @ {thief_dist:.0f}m: ABS active. "
-            f"{d_pt['speed'] - b_pt['speed']:.1f} km/h vs benchmark at peak loss point."
+            f"Biggest loss at {thief_dist:.0f}m — ABS is active and you're "
+            f"{abs(d_pt['speed'] - b_pt['speed']):.1f} km/h off the benchmark right there."
         )
     elif d_pt['throttle'] < b_pt['throttle'] - 20:
         warn_card(
-            f"Primary Time Thief @ {thief_dist:.0f}m: Throttle hesitation. "
-            f"You: {d_pt['throttle']:.0f}% | Benchmark: {b_pt['throttle']:.0f}%."
+            f"Biggest loss at {thief_dist:.0f}m — you're at {d_pt['throttle']:.0f}% throttle "
+            f"where the benchmark is at {b_pt['throttle']:.0f}%. You're hesitating."
         )
 
 # ══════════════════════════════════════════════════════════════════════════════
-# FIX 4 — SECTOR VERDICT BLOCK
+# SECTOR VERDICT
 # ══════════════════════════════════════════════════════════════════════════════
 def sector_verdict(sec_name, sec_delta, abs_cost, throttle_cost, apex_cost):
-    """
-    Outputs a ranked plain-English to-do list for the sector.
-    Costs are sorted by magnitude so the driver knows exactly
-    what to fix first for maximum lap time return.
-    """
-    section_header("SECTOR VERDICT — Ranked To-Do List")
+    section_header("What To Fix")
 
     diagnosed_total = abs_cost + throttle_cost + apex_cost
     undiagnosed     = sec_delta - diagnosed_total
 
     items = [
-        ("ABS Saturation — Over-aggressive brake application",
+        ("Braking — too aggressive on entry",
          abs_cost,
-         "Build brake pressure progressively. First 30% of brake zone = 60% of peak pressure only."),
-        ("Apex Speed Deficit — Entry technique killing rotation",
+         "Build brake pressure progressively. Start at 60% and ramp up. Don't stab it."),
+        ("Corner speed — losing rotation on entry",
          apex_cost,
-         "Release brake 10–15m earlier. Use trail-brake through apex to load front tire."),
-        ("Throttle Discipline — Sawtooth exit application",
+         "Release the brake earlier. Let the car rotate. Trail-brake through the apex."),
+        ("Throttle — lifting off on exit",
          throttle_cost,
-         "Follow 0→30→70→100% exit sequence. No reversal until steering is unwinding."),
+         "30% throttle at apex, 70% when unwinding, 100% when straight. No lifting."),
     ]
-
-    # Sort by cost descending
     items.sort(key=lambda x: x[1], reverse=True)
 
     lines = [
-        f"<strong>📋 {sec_name} — Sector Delta: {sec_delta:+.3f}s</strong><br>",
-        f"Diagnosed: {diagnosed_total:+.3f}s &nbsp;|&nbsp; "
-        f"Undiagnosed residual: {undiagnosed:+.3f}s<br><br>",
-        "<strong>Priority Order:</strong><br>"
+        f"<strong>📋 {sec_name} — Total gap: {sec_delta:+.3f}s</strong><br>",
+        f"We can explain {diagnosed_total:+.3f}s of that. "
+        f"Residual: {undiagnosed:+.3f}s (line choice, gear selection).<br><br>",
+        "<strong>Fix these in order:</strong><br>"
     ]
 
     for rank, (label, cost, action) in enumerate(items, 1):
         if cost > 0.005:
-            icon  = "🔴" if rank == 1 else ("🟡" if rank == 2 else "🔵")
+            icon = "🔴" if rank == 1 else ("🟡" if rank == 2 else "🔵")
             lines.append(
                 f"{icon} <strong>#{rank} — {label}</strong><br>"
-                f"&nbsp;&nbsp;&nbsp;&nbsp;Cost: {cost:+.3f}s<br>"
-                f"&nbsp;&nbsp;&nbsp;&nbsp;Action: {action}<br><br>"
+                f"&nbsp;&nbsp;&nbsp;Cost: {cost:+.3f}s<br>"
+                f"&nbsp;&nbsp;&nbsp;Fix: {action}<br><br>"
             )
 
     if abs(undiagnosed) > 0.05:
         lines.append(
-            f"⚪ Residual {undiagnosed:+.3f}s — likely line/gear selection. "
-            f"Review track map overlay in Garage 61."
+            f"⚪ {undiagnosed:+.3f}s still unaccounted for — "
+            f"check your line in Garage 61."
         )
 
     verdict_card("".join(lines))
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 1 — SECTOR AUDIT
+# ══════════════════════════════════════════════════════════════════════════════
+def tab_sector_audit():
+    st.header("Sector Audit")
+
+    with st.sidebar:
+        st.markdown("---")
+        st.markdown("**Car & Track**")
+
+        car_options  = CARS
+        car_select   = st.selectbox("Car", car_options)
+        custom_car   = ""
+        if car_select == "Other (type below)":
+            custom_car = st.text_input("Car name")
+        car_name = custom_car if custom_car else car_select
+
+        track_options = list(TRACKS.keys())
+        track_select  = st.selectbox("Track", track_options)
+        custom_track  = ""
+        if track_select == "Other (type below)":
+            custom_track = st.text_input("Track name")
+        track_config  = TRACKS[track_select]
+        track_length  = track_config["length_m"]
+        if track_select == "Other (type below)":
+            track_length = st.number_input("Track length (m)", value=4000, step=100)
+            track_config["length_m"] = track_length
+
+        st.markdown("---")
+        st.markdown("**Lap Files**")
+
+        d_file = st.file_uploader("Your lap (CSV)", type="csv", key="driver_lap")
+        b_file = st.file_uploader("Benchmark lap (CSV)", type="csv", key="bench_lap")
+
+        st.markdown("---")
+        st.markdown("**Modules**")
+        run_abs      = st.checkbox("ABS Check",      value=True)
+        run_throttle = st.checkbox("Throttle Check", value=True)
+        run_apex     = st.checkbox("Corner Speed",   value=True)
+        run_verdict  = st.checkbox("Verdict",        value=True)
+
+    if not d_file or not b_file:
+        st.info("Upload your lap file and a benchmark lap in the sidebar to get started.")
+        return
+
+    df_d = clean_df(pd.read_csv(d_file), track_length)
+    df_b = clean_df(pd.read_csv(b_file), track_length)
+
+    grid, res_d, res_b = build_grid(df_d, df_b, n=10000)
+    delta = calc_delta(grid, res_d, res_b)
+
+    total_delta = float(delta.iloc[-1])
+    st.caption(f"Car: **{car_name}** | Track: **{track_select if track_select != 'Other (type below)' else custom_track}**")
+    st.metric("Total Lap Gap", f"{total_delta:+.3f}s", delta="vs benchmark", delta_color="inverse")
+
+    sectors = track_config["sectors"]
+    corners = track_config["corners"]
+
+    # Update sector end boundary if custom track length differs
+    if track_select == "Other (type below)":
+        sectors[-1]["end"] = track_length
+
+    for sec in sectors:
+        mask_bool     = (grid >= sec['start']) & (grid <= sec['end'])
+        sec_delta_val = float(delta[mask_bool].iloc[-1] - delta[mask_bool].iloc[0])
+        label         = f"📌 {sec['name']}  |  {sec_delta_val:+.3f}s"
+
+        with st.expander(label, expanded=(sec['start'] == 0)):
+            time_thief_summary(grid, res_d, res_b, delta, mask_bool)
+
+            abs_cost = throttle_cost = apex_cost = 0.0
+
+            if run_abs:
+                abs_cost      = abs_audit(grid, res_d, res_b, mask_bool, sec['name'])
+            if run_throttle:
+                throttle_cost = throttle_discipline(grid, res_d, res_b, mask_bool, sec['name'])
+            if run_apex:
+                apex_cost     = corner_min_speed(grid, res_d, res_b, mask_bool, sec['name'], corners)
+            if run_verdict:
+                sector_verdict(sec['name'], sec_delta_val, abs_cost, throttle_cost, apex_cost)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 2 — DRIVER COACH
+# ══════════════════════════════════════════════════════════════════════════════
+def tab_driver_coach():
+    st.header("Driver Coach")
+    st.caption("Upload your lap and benchmark — get a plain-English coaching brief from Gemini.")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        car_coach   = st.selectbox("Car", CARS, key="coach_car")
+        if car_coach == "Other (type below)":
+            car_coach = st.text_input("Car name", key="coach_car_custom")
+    with col2:
+        track_coach = st.selectbox("Track", list(TRACKS.keys()), key="coach_track")
+        if track_coach == "Other (type below)":
+            track_coach = st.text_input("Track name", key="coach_track_custom")
+
+    d_file = st.file_uploader("Your lap (CSV)", type="csv", key="coach_driver")
+    b_file = st.file_uploader("Benchmark lap (CSV)", type="csv", key="coach_bench")
+
+    extra_context = st.text_area(
+        "Anything specific you want coaching on? (optional)",
+        placeholder="e.g. I keep getting oversteer at T3 on the way out..."
+    )
+
+    if not d_file or not b_file:
+        st.info("Upload both lap files above to get your coaching brief.")
+        return
+
+    if st.button("Get Coaching Brief", type="primary"):
+        track_length = TRACKS.get(track_coach, TRACKS["Other (type below)"])["length_m"]
+        df_d = clean_df(pd.read_csv(d_file), track_length)
+        df_b = clean_df(pd.read_csv(b_file), track_length)
+
+        grid, res_d, res_b = build_grid(df_d, df_b, n=10000)
+        delta   = calc_delta(grid, res_d, res_b)
+        sectors = TRACKS.get(track_coach, TRACKS["Other (type below)"])["sectors"]
+        corners = TRACKS.get(track_coach, TRACKS["Other (type below)"])["corners"]
+
+        # Build telemetry summary for Gemini
+        summary_lines = [
+            f"Car: {car_coach}",
+            f"Track: {track_coach}",
+            f"Total lap delta: {float(delta.iloc[-1]):+.3f}s (positive = driver is slower)",
+        ]
+
+        for sec in sectors:
+            mask          = (grid >= sec['start']) & (grid <= sec['end'])
+            sec_delta_val = float(delta[mask].iloc[-1] - delta[mask].iloc[0])
+            abs_signal    = res_d['abs'].values[mask]
+            abs_pct       = 100.0 * float(np.mean(abs_signal > 0.5))
+            avg_spd_diff  = float(np.mean(res_d['speed'].values[mask] - res_b['speed'].values[mask]))
+            summary_lines.append(
+                f"{sec['name']}: delta={sec_delta_val:+.3f}s, "
+                f"ABS active {abs_pct:.1f}% of sector, "
+                f"avg speed diff {avg_spd_diff:+.1f} km/h"
+            )
+
+        for corner_name, apex_dist, window in corners:
+            idx      = int(np.clip(np.searchsorted(grid, apex_dist), 0, len(grid)-1))
+            mask_win = (grid >= apex_dist - window) & (grid <= apex_dist + window)
+            if mask_win.sum() < 3:
+                continue
+            apex_d = float(np.min(res_d['speed'].values[mask_win]))
+            apex_b = float(np.min(res_b['speed'].values[mask_win]))
+            summary_lines.append(
+                f"{corner_name}: apex speed {apex_d:.1f} km/h vs benchmark {apex_b:.1f} km/h "
+                f"(diff {apex_d - apex_b:+.1f} km/h)"
+            )
+
+        telemetry_summary = "\n".join(summary_lines)
+
+        prompt = f"""
+You are a direct, no-nonsense racing driver coach. 
+You speak plainly — no jargon, no fluff. 
+You give specific, actionable feedback a club-level sim racer can actually use.
+
+Here is the telemetry data from one session:
+
+{telemetry_summary}
+
+{"Driver's note: " + extra_context if extra_context else ""}
+
+Give me:
+1. The single biggest thing costing this driver time and exactly how to fix it (2-3 sentences max)
+2. A ranked list of the top 3 things to work on this session, with one specific physical action for each
+3. One thing the driver is actually doing well (find something positive in the data)
+4. A one-line focus cue they can repeat to themselves on track
+
+Keep it direct. No bullet-point overload. Talk to them like a coach in a garage, not a textbook.
+"""
+
+        with st.spinner("Analysing your session..."):
+            response = model.generate_content(prompt)
+            st.markdown("### Your Coaching Brief")
+            st.markdown(response.text)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 3 — SESSION ANALYSIS
+# ══════════════════════════════════════════════════════════════════════════════
+def tab_session_analysis():
+    st.header("Session Analysis")
+    st.caption("Upload your full session CSV from Garage 61 for fuel, consistency and pace analysis.")
+
+    session_file = st.file_uploader("Session CSV (all laps)", type="csv", key="session_csv")
+
+    if not session_file:
+        st.info("Upload your session CSV to get started.")
+        return
+
+    df = pd.read_csv(session_file)
+    df.columns = df.columns.str.strip()
+
+    # Normalise key columns
+    col_map = {}
+    for col in df.columns:
+        cl = col.lower().replace(' ', '').replace('_', '')
+        if 'laptime' in cl or cl == 'lap time':
+            col_map['lap_time']  = col
+        if cl == 'lap':
+            col_map['lap']       = col
+        if 'fuel' in cl and 'used' in cl:
+            col_map['fuel_used'] = col
+        if 'fuel' in cl and 'level' in cl:
+            col_map['fuel_level']= col
+        if 'sector1' in cl or cl == 'sector 1':
+            col_map['s1']        = col
+        if 'sector2' in cl or cl == 'sector 2':
+            col_map['s2']        = col
+        if 'sector3' in cl or cl == 'sector 3':
+            col_map['s3']        = col
+        if 'tracktemp' in cl or cl == 'track temp':
+            col_map['track_temp']= col
+        if 'airtemp' in cl or cl == 'air temperature':
+            col_map['air_temp']  = col
+        if 'clean' in cl:
+            col_map['clean']     = col
+
+    has = lambda k: k in col_map
+
+    # Filter clean laps if available
+    if has('clean'):
+        clean_df_session = df[df[col_map['clean']] == 1].copy()
+        st.caption(f"{len(clean_df_session)} clean laps of {len(df)} total")
+    else:
+        clean_df_session = df.copy()
+
+    if has('lap_time'):
+        clean_df_session[col_map['lap_time']] = pd.to_numeric(
+            clean_df_session[col_map['lap_time']], errors='coerce')
+        clean_df_session = clean_df_session.dropna(subset=[col_map['lap_time']])
+
+    # ── PACE & CONSISTENCY ─────────────────────────────────────────────────────
+    section_header("Pace & Consistency")
+
+    if has('lap_time') and has('lap'):
+        lap_col  = col_map['lap']
+        time_col = col_map['lap_time']
+
+        best     = clean_df_session[time_col].min()
+        avg      = clean_df_session[time_col].mean()
+        worst    = clean_df_session[time_col].max()
+        std_dev  = clean_df_session[time_col].std()
+
+        cols = st.columns(4)
+        cols[0].metric("Best Lap",    f"{best:.3f}s")
+        cols[1].metric("Average",     f"{avg:.3f}s")
+        cols[2].metric("Worst Lap",   f"{worst:.3f}s")
+        cols[3].metric("Consistency", f"±{std_dev:.3f}s")
+
+        if std_dev < 0.5:
+            ok_card("Very consistent pace. Focus is on outright speed now.")
+        elif std_dev < 1.5:
+            warn_card(
+                f"±{std_dev:.3f}s lap-to-lap variation. "
+                f"There are some inconsistent laps — look at where the big ones are."
+            )
+        else:
+            fault_card(
+                f"±{std_dev:.3f}s variation is too high. "
+                f"Consistency is the priority before chasing lap time."
+            )
+
+        # Lap time chart
+        chart_data = clean_df_session[[lap_col, time_col]].set_index(lap_col)
+        st.line_chart(chart_data, use_container_width=True)
+
+    # ── SECTOR CONSISTENCY ─────────────────────────────────────────────────────
+    if has('s1') and has('s2') and has('s3'):
+        section_header("Sector Breakdown")
+
+        for s_key, s_label in [('s1', 'S1'), ('s2', 'S2'), ('s3', 'S3')]:
+            clean_df_session[col_map[s_key]] = pd.to_numeric(
+                clean_df_session[col_map[s_key]], errors='coerce')
+
+        sector_stats = {}
+        for s_key, s_label in [('s1', 'S1'), ('s2', 'S2'), ('s3', 'S3')]:
+            s_data = clean_df_session[col_map[s_key]].dropna()
+            if len(s_data) > 0:
+                sector_stats[s_label] = {
+                    'best':  s_data.min(),
+                    'avg':   s_data.mean(),
+                    'std':   s_data.std(),
+                }
+
+        cols = st.columns(3)
+        for i, (label, stats) in enumerate(sector_stats.items()):
+            cols[i].metric(f"{label} Best",  f"{stats['best']:.3f}s")
+            cols[i].metric(f"{label} Avg",   f"{stats['avg']:.3f}s")
+            cols[i].metric(f"{label} Var",   f"±{stats['std']:.3f}s")
+
+        # Identify weakest sector
+        if sector_stats:
+            weakest = max(sector_stats.items(), key=lambda x: x[1]['std'])
+            warn_card(
+                f"Your most inconsistent sector is {weakest[0]} "
+                f"(±{weakest[1]['std']:.3f}s). That's where to focus."
+            )
+
+    # ── FUEL ANALYSIS ──────────────────────────────────────────────────────────
+    if has('fuel_used') or has('fuel_level'):
+        section_header("Fuel Analysis")
+
+        if has('fuel_used'):
+            clean_df_session[col_map['fuel_used']] = pd.to_numeric(
+                clean_df_session[col_map['fuel_used']], errors='coerce')
+            fuel_data     = clean_df_session[col_map['fuel_used']].dropna()
+            avg_fuel      = fuel_data.mean()
+            max_fuel      = fuel_data.max()
+            min_fuel      = fuel_data.min()
+
+            cols = st.columns(3)
+            cols[0].metric("Avg Fuel/Lap",  f"{avg_fuel:.2f}L")
+            cols[1].metric("Max Fuel/Lap",  f"{max_fuel:.2f}L")
+            cols[2].metric("Min Fuel/Lap",  f"{min_fuel:.2f}L")
+
+            # Pit strategy estimates
+            for tank_size in [55, 60, 65, 70]:
+                if avg_fuel > 0:
+                    laps_per_stint = int(tank_size / avg_fuel)
+                    st.write(
+                        f"With a {tank_size}L tank — "
+                        f"approx **{laps_per_stint} laps** per stint "
+                        f"at current fuel usage."
+                    )
+                    break
+
+            if max_fuel - min_fuel > avg_fuel * 0.3:
+                warn_card(
+                    f"Fuel usage varies {min_fuel:.2f}–{max_fuel:.2f}L per lap. "
+                    f"That's inconsistent throttle application across laps."
+                )
+            else:
+                ok_card("Fuel usage is consistent lap to lap.")
+
+    # ── TRACK CONDITION CORRELATION ────────────────────────────────────────────
+    if has('track_temp') and has('lap_time'):
+        section_header("Track Condition vs Pace")
+
+        clean_df_session[col_map['track_temp']] = pd.to_numeric(
+            clean_df_session[col_map['track_temp']], errors='coerce')
+        temp_lap = clean_df_session[[col_map['track_temp'], col_map['lap_time']]].dropna()
+
+        if len(temp_lap) > 3:
+            corr = float(temp_lap.corr().iloc[0, 1])
+            st.write(f"Track temp vs lap time correlation: **{corr:.2f}**")
+            if corr < -0.3:
+                ok_card("Warmer track = faster laps. Rubber is going down as the session goes on.")
+            elif corr > 0.3:
+                warn_card("Warmer track = slower laps. Possible tire overheating.")
+            else:
+                st.write("No strong correlation between track temp and your pace this session.")
+
+    # ── GEMINI SESSION SUMMARY ─────────────────────────────────────────────────
+    section_header("AI Session Summary")
+
+    if st.button("Get Session Summary from AI", type="primary"):
+        summary_data = []
+        if has('lap_time'):
+            summary_data.append(
+                f"Lap times — Best: {clean_df_session[col_map['lap_time']].min():.3f}s, "
+                f"Avg: {clean_df_session[col_map['lap_time']].mean():.3f}s, "
+                f"Std dev: {clean_df_session[col_map['lap_time']].std():.3f}s"
+            )
+        if has('fuel_used'):
+            summary_data.append(
+                f"Fuel — Avg per lap: "
+                f"{clean_df_session[col_map['fuel_used']].mean():.2f}L"
+            )
+        if has('s1') and has('s2') and has('s3'):
+            for s_key, s_label in [('s1','S1'),('s2','S2'),('s3','S3')]:
+                s_data = clean_df_session[col_map[s_key]].dropna()
+                if len(s_data):
+                    summary_data.append(
+                        f"{s_label} — Best: {s_data.min():.3f}s, "
+                        f"Avg: {s_data.mean():.3f}s, "
+                        f"Std: {s_data.std():.3f}s"
+                    )
+
+        prompt = f"""
+You are a direct racing engineer reviewing a driver's session data.
+Plain language only. No jargon. Talk like you're in the garage.
+
+Session data:
+{chr(10).join(summary_data)}
+
+Total laps analysed: {len(clean_df_session)}
+
+Give me:
+1. One-paragraph summary of how the session went
+2. The single most important thing to improve next session
+3. A specific target lap time goal for next session based on the data
+Keep it short and direct.
+"""
+        with st.spinner("Reading your session..."):
+            response = model.generate_content(prompt)
+            st.markdown(response.text)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 4 — GARAGE (SCAFFOLDED)
+# ══════════════════════════════════════════════════════════════════════════════
+def tab_garage():
+    st.header("Garage Advisor")
+
+    st.markdown("""
+    <div class="coming-soon">
+        <h3>🔧 Coming Soon</h3>
+        <p>This tab will let you upload your setup and describe what's feeling wrong —
+        and the engineer tells you exactly what to adjust.</p>
+        <p>Both HTML setup upload and manual input will be supported.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.markdown("**Preview — Manual Input (not yet active)**")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.text_input("Car",           placeholder="Porsche 992.2 GT3 Cup", disabled=True)
+        st.text_input("Track",         placeholder="Zandvoort GP",          disabled=True)
+        st.slider("TC Level (1–10)",   1, 10, 5,                            disabled=True)
+        st.slider("ABS Setting",       1, 10, 5,                            disabled=True)
+        st.number_input("Brake Bias",  disabled=True)
+    with col2:
+        st.number_input("Ride Height Front (mm)", disabled=True)
+        st.number_input("Ride Height Rear (mm)",  disabled=True)
+        st.number_input("Tyre Pressure FL (psi)", disabled=True)
+        st.number_input("Tyre Pressure FR (psi)", disabled=True)
+
+    st.text_area(
+        "What's feeling wrong?",
+        placeholder="e.g. The rear is snapping on exit of slow corners...",
+        disabled=True
+    )
+    st.button("Ask the Engineer", disabled=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN
@@ -626,87 +1024,23 @@ def sector_verdict(sec_name, sec_delta, abs_cost, throttle_cost, apex_cost):
 def main():
     inject_css()
 
-    DATA_DIR = "."
-    with st.sidebar:
-        st.title("🛠️ Race Engineer Config")
-        st.markdown("---")
-        files = sorted([f for f in os.listdir(DATA_DIR) if f.endswith('.csv')])
-        if len(files) < 2:
-            st.error("Need at least 2 CSV files in the working directory.")
-            st.stop()
+    st.title("🏁 Race Engineer Pro")
 
-        d_file = st.selectbox("Driver Lap",    files, index=0)
-        b_file = st.selectbox("Benchmark Lap", files, index=min(1, len(files) - 1))
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📊 Sector Audit",
+        "🎯 Driver Coach",
+        "📋 Session Analysis",
+        "🔧 Garage"
+    ])
 
-        if d_file == b_file:
-            st.warning("Select different files for driver and benchmark.")
-            st.stop()
-
-        st.markdown("---")
-        st.markdown("**Active Modules**")
-        run_abs      = st.checkbox("A — ABS Audit",           value=True)
-        run_throttle = st.checkbox("B — Throttle Discipline",  value=True)
-        run_apex     = st.checkbox("C — Apex Speed",           value=True)
-        run_verdict  = st.checkbox("Sector Verdict",           value=True)
-
-    df_d = clean_df(pd.read_csv(os.path.join(DATA_DIR, d_file)))
-    df_b = clean_df(pd.read_csv(os.path.join(DATA_DIR, b_file)))
-
-    grid, res_d, res_b = build_grid(df_d, df_b, n=10000)
-    delta = calc_delta(grid, res_d, res_b)
-
-    st.title("🏁 Race Engineer Pro — Diagnostic Engine")
-    st.caption(
-        f"Driver: `{d_file}`  |  "
-        f"Benchmark: `{b_file}`  |  "
-        f"Track: Zandvoort GP"
-    )
-
-    total_delta = float(delta.iloc[-1])
-    st.metric(
-        "Total Lap Delta",
-        f"{total_delta:+.3f}s",
-        delta="vs benchmark",
-        delta_color="inverse"
-    )
-
-    # FIX 3: S1 extended to 1150m to capture full T3 exit throttle zone
-    sectors = [
-        {"name": "Sector 1 (Start – T3)",    "start": 0,    "end": 1150},
-        {"name": "Sector 2 (T4 – T10)",      "start": 1150, "end": 2750},
-        {"name": "Sector 3 (Chicane – End)", "start": 2750, "end": grid[-1]},
-    ]
-
-    for sec in sectors:
-        mask_bool = (grid >= sec['start']) & (grid <= sec['end'])
-
-        sec_delta_val = float(
-            delta[mask_bool].iloc[-1] - delta[mask_bool].iloc[0]
-        )
-        label = f"📌 {sec['name']}  |  Δ {sec_delta_val:+.3f}s"
-
-        with st.expander(label, expanded=(sec['start'] == 0)):
-
-            time_thief_summary(grid, res_d, res_b, delta, mask_bool)
-
-            abs_cost      = 0.0
-            throttle_cost = 0.0
-            apex_cost     = 0.0
-
-            if run_abs:
-                abs_cost      = abs_audit(
-                    grid, res_d, res_b, mask_bool, sec['name'])
-            if run_throttle:
-                throttle_cost = throttle_discipline(
-                    grid, res_d, res_b, mask_bool, sec['name'])
-            if run_apex:
-                apex_cost     = corner_min_speed(
-                    grid, res_d, res_b, mask_bool, sec['name'])
-            if run_verdict:
-                sector_verdict(
-                    sec['name'], sec_delta_val,
-                    abs_cost, throttle_cost, apex_cost
-                )
+    with tab1:
+        tab_sector_audit()
+    with tab2:
+        tab_driver_coach()
+    with tab3:
+        tab_session_analysis()
+    with tab4:
+        tab_garage()
 
 if __name__ == "__main__":
     main()
