@@ -1,87 +1,100 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-# --- SETUP DICTIONARY: SUBJECTIVE TO OBJECTIVE ---
-# This acts as the Engineer's "Brain"
-SETUP_ADVISOR = {
-    "Corner Entry": {
-        "Understeer (Doesn't want to turn)": "Lower Front Ride Height or Soften Front Springs.",
-        "Oversteer (Rear is nervous/slides)": "Move Brake Bias forward or Stiffen Front Compression.",
-    },
-    "Mid-Corner": {
-        "Understeer (Pushes wide)": "Soften Front Anti-Roll Bar or increase Front Wing.",
-        "Oversteer (Rear feels loose)": "Soften Rear Anti-Roll Bar or increase Rear Wing.",
-    },
-    "Corner Exit": {
-        "Understeer (Pushes wide on gas)": "Soften Front Rebound or increase Rear Compression.",
-        "Oversteer (Snaps when flooring it)": "Soften Rear Springs or increase Rear Toe-in.",
-    },
-    "General / Bumps": {
-        "Car bounces on curbs": "Soften Slow Compression or increase Ride Height.",
-        "Bottoming out on straights": "Increase Spring Rate or add Bumpstop shims.",
+st.set_page_config(page_title="G61 Performance Hub", layout="wide")
+
+# --- DATA: THE ENGINEER'S KNOWLEDGE BASE ---
+CHASSIS_LOGIC = {
+    "Corner Phase": {
+        "Entry (Braking/Turn-in)": {
+            "Understeer": "Move Brake Bias forward or soften Front Springs.",
+            "Oversteer": "Move Brake Bias rearward or stiffen Front Bump/Compression."
+        },
+        "Mid-Corner (Apex/Coasting)": {
+            "Understeer": "Soften Front Anti-Roll Bar (ARB) or increase Front Wing.",
+            "Oversteer": "Soften Rear ARB or increase Rear Wing."
+        },
+        "Exit (Throttle Application)": {
+            "Understeer": "Soften Front Rebound or increase Rear Compression.",
+            "Oversteer": "Soften Rear Springs or increase Rear Toe-in."
+        }
     }
 }
 
-st.set_page_config(page_title="Chassis Engineering Lab", layout="wide")
+# --- TAB NAVIGATION ---
+tab_telemetry, tab_setup = st.tabs(["📊 Full Telemetry Analysis", "🔧 Setup Engineer"])
 
-# --- UI HEADER ---
-st.title("🛠️ Chassis Engineering Lab")
-st.markdown("Driver Coaching is disabled. Focus: **Mechanical Compliance & Driveability.**")
+# --- TAB 1: FULL TELEMETRY (The G61 View) ---
+with tab_telemetry:
+    st.subheader("High-Density Telemetry")
+    col_u, col_r = st.columns(2)
+    with col_u: user_file = st.file_uploader("🟥 Your Lap (CSV)", type=['csv'])
+    with col_r: ref_file = st.file_uploader("🟦 Reference (CSV)", type=['csv'])
 
-# --- LAYOUT ---
-col_feedback, col_action = st.columns([1, 1])
+    if user_file and ref_file:
+        df_u = pd.read_csv(user_file).sort_values('LapDistPct')
+        df_r = pd.read_csv(ref_file).sort_values('LapDistPct')
+        
+        # High-Density Plotting
+        fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.02,
+                            subplot_titles=("Speed", "Throttle/Brake", "Steering", "Gear"))
+        
+        # Speed
+        fig.add_trace(go.Scatter(x=df_u['LapDistPct'], y=df_u['Speed']*3.6, name="You", line=dict(color='red')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df_r['LapDistPct'], y=df_r['Speed']*3.6, name="Ref", line=dict(color='blue', dash='dot')), row=1, col=1)
+        
+        # Pedals
+        fig.add_trace(go.Scatter(x=df_u['LapDistPct'], y=df_u['Throttle']*100, name="Thr", line=dict(color='green')), row=2, col=1)
+        fig.add_trace(go.Scatter(x=df_u['LapDistPct'], y=df_u['Brake']*100, name="Brk", fill='tozeroy', line=dict(color='white')), row=2, col=1)
+        
+        # Steering
+        fig.add_trace(go.Scatter(x=df_u['LapDistPct'], y=df_u['SteeringWheelAngle'], name="Steer", line=dict(color='cyan')), row=3, col=1)
+        
+        fig.update_layout(height=800, template="plotly_dark", showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
 
-with col_feedback:
-    st.subheader("📋 Driver Debrief")
-    st.info("Tell me exactly what you dislike about the current balance.")
+# --- TAB 2: SETUP ENGINEER (The Deep Dive) ---
+with tab_setup:
+    st.subheader("Chassis & Aero Consultant")
     
-    # 1. Select the Phase
-    phase = st.selectbox("Where is the issue occurring?", list(SETUP_ADVISOR.keys()))
+    col_diag, col_tool = st.columns([1, 1.5])
     
-    # 2. Select the Feeling
-    feeling = st.selectbox("What is the car doing?", list(SETUP_ADVISOR[phase].keys()))
-    
-    # 3. Driving Style Adjustment
-    style = st.radio(
-        "Preferred Driving Style:",
-        ["Pointy/Oversteery (Rotation focus)", "Stable/Understeery (Security focus)", "Balanced"],
-        index=2
-    )
-    
-    notes = st.text_area("Specific Details (e.g., 'Only happens in Turn 3 under trail-braking')")
+    with col_diag:
+        st.write("### 🩺 Diagnostic Input")
+        phase = st.selectbox("Where is the car struggling?", list(CHASSIS_LOGIC["Corner Phase"].keys()))
+        issue = st.radio("What is the sensation?", ["Understeer", "Oversteer"])
+        
+        st.write("---")
+        st.write("### 🌡️ Tire Thermal Audit")
+        st.caption("Input your temps (Inner - Middle - Outer) after a 5-lap stint.")
+        t_left = st.text_input("Front Left (e.g., 85-82-79)", "80-80-80")
+        
+        if st.button("Analyze Balance"):
+            st.session_state.show_fix = True
 
-with col_action:
-    st.subheader("🔧 Engineer's Prescription")
-    
-    # Logic-based recommendation
-    fix = SETUP_ADVISOR[phase][feeling]
-    
-    st.success(f"**Primary Adjustment:** {fix}")
-    
-    # Contextual Tuning
-    st.markdown("---")
-    st.write("### 🧠 The Engineering Logic")
-    if "Understeer" in feeling:
-        st.write("We need to shift the **Mechanical Grip** to the front axle. By softening the front, we allow more weight transfer to load the front tires.")
-    elif "Oversteer" in feeling:
-        st.write("The rear tires are being overwhelmed. We are reducing the rate of weight transfer or increasing downforce to keep the rear planted.")
+    with col_tool:
+        st.write("### 🛠️ Mechanical Prescription")
+        if st.session_state.get('show_fix'):
+            recommendation = CHASSIS_LOGIC["Corner Phase"][phase][issue]
+            st.success(f"**Recommended Change:** {recommendation}")
+            
+            # THE "WHY" (Learning the Setup)
+            st.info("### 🧠 The Setup Logic")
+            if "Springs" in recommendation:
+                st.write("By softening the springs on the axle that is sliding, you increase the **Mechanical Grip** by allowing the tire to stay in contact with the track surface more effectively.")
+            
+            # Tire Logic
+            temps = [int(t) for t in t_left.split("-")]
+            if temps[0] > temps[2] + 5:
+                st.warning("⚠️ **Camber Issue:** Your Inner temp is much higher. Reduce negative Camber to flatten the tire footprint.")
+            elif temps[1] > (temps[0] + temps[2]) / 2:
+                st.warning("⚠️ **Pressure Issue:** Middle temp is high. Lower your cold tire pressures.")
 
-    # Style-specific tweak
-    if style == "Pointy/Oversteery (Rotation focus)" and "Understeer" in feeling:
-        st.warning("⚠️ **Aggressive Tweak:** Since you like a pointy car, consider also increasing **Rear Ride Height** by 2mm to force the nose down.")
-    
     st.divider()
-    st.caption("Pro Tip: Check your tire temps. If the middles are hotter than the edges, your pressures are too high, which masks setup issues.")
-
-# --- SETUP LOG ---
-st.header("📝 Setup Change Log")
-if 'log' not in st.session_state: st.session_state.log = []
-
-with st.form("log_form"):
-    change = st.text_input("What did you change?")
-    result = st.text_input("Result (e.g., 'Gained 0.2s', 'Too loose')")
-    if st.form_submit_state("Save Change"):
-        st.session_state.log.append({"Change": change, "Result": result})
-
-if st.session_state.log:
-    st.table(pd.DataFrame(st.session_state.log))
+    st.write("### 📝 Setup Change Log")
+    st.caption("Track your changes. If you don't go faster in 3 laps, revert.")
+    st.text_input("Change made:", placeholder="e.g., -2 clicks Rear ARB")
+    st.text_area("Resulting Feel:")
