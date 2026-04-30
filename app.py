@@ -4,8 +4,12 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# --- 1. SYSTEM CONFIGURATION & UI ---
-st.set_page_config(page_title="Race Engineer Pro | Porsche 992.2 Edition", layout="wide")
+# --- 1. SYSTEM CONFIGURATION ---
+st.set_page_config(page_title="Race Engineer Pro | Porsche 992.2 Cup", layout="wide")
+
+# Replace these strings with your exact local filenames for "No-Upload" mode
+DEFAULT_DRIVER = "Garage_61_-_Jonas_Hauerbach_-_Porsche_911_Cup__992_2__-_Circuit_Zandvoort__Grand_Prix__-_01_41_980_-_01KQAKNQHNGGR7RTTC9DMD0F59.csv"
+DEFAULT_BENCHMARK = "Garage_61_-_Leeroy_Malmross_-_Porsche_911_Cup__992_2__-_Circuit_Zandvoort__Grand_Prix__-_01_41_332_-_01KQ5E93PS1W2T3SH5ECRJNCF6.csv"
 
 def apply_custom_css():
     st.markdown("""
@@ -18,59 +22,53 @@ def apply_custom_css():
         </style>
     """, unsafe_allow_html=True)
 
-# Initialize Session State for Garage
 if 'garage' not in st.session_state:
-    st.session_state.garage = {
-        "Brake Bias": 54.0, "TC Map": 4, "ABS Map": 4, 
-        "Front ARB": 5, "Rear ARB": 3, "Wing": 6
-    }
+    st.session_state.garage = {"Brake Bias": 54.0, "TC Map": 4, "ABS Map": 4, "ARB F/R": "5/3"}
 
-# --- 2. PHYSICS & TELEMETRY ENGINE ---
+# --- 2. CORE PHYSICS ENGINE ---
 
 def process_telemetry(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = [c.strip() for c in df.columns]
     
-    # Unit Normalization (m/s² to G) - Fixes the "40G" Error
-    mapping = {'LatAccel': 'LatG', 'LongAccel': 'LonG', 'LonAccel': 'LonG'}
-    for src, dest in mapping.items():
+    # Physics Normalization: m/s² to G (The 9.81 Fix)
+    for src, dest in {'LatAccel': 'LatG', 'LongAccel': 'LonG', 'LonAccel': 'LonG'}.items():
         if src in df.columns:
             df[dest] = pd.to_numeric(df[src], errors='coerce').fillna(0) / 9.81
     
-    # Calculate G-Sum (Traction Circle Utilization)
     if 'LatG' in df.columns and 'LonG' in df.columns:
         df['GSum'] = np.sqrt(df['LatG']**2 + df['LonG']**2)
 
-    # ABS Conversion
+    # Convert ABS Strings
     if 'ABSActive' in df.columns:
         df['ABSActive'] = df['ABSActive'].map({'true': 1, 'false': 0, 1: 1, 0: 0}).fillna(0)
 
-    # Speed Normalization (Ensure km/h)
+    # Normalize Speed to km/h
     if 'Speed' in df.columns:
         df['Speed'] = pd.to_numeric(df['Speed'], errors='coerce').fillna(0)
-        if df['Speed'].max() < 100: df['Speed'] *= 3.6 # Convert m/s to km/h
-
-    return df
+        if df['Speed'].max() < 100: df['Speed'] *= 3.6 
+    
+    # Distance handling
+    dist_col = 'Distance' if 'Distance' in df.columns else ('LapDist' if 'LapDist' in df.columns else None)
+    if dist_col:
+        df['Dist'] = pd.to_numeric(df[dist_col], errors='coerce')
+    
+    return df.sort_values('Dist') if 'Dist' in df.columns else df
 
 def align_and_resample(df_d, df_b, points=5000):
-    # Anchor track length to BENCHMARK to fix Delta Drift
-    max_dist = df_b['Distance'].max() if 'Distance' in df_b.columns else 4259
+    # Anchor to Benchmark Distance to fix +0.1s Delta Error
+    max_dist = df_b['Dist'].max()
     grid = np.linspace(0, max_dist, points)
 
-    def interp_lap(df, source_dist_col):
-        out = pd.DataFrame({'Distance': grid})
-        channels = ['Speed', 'Throttle', 'Brake', 'SteeringWheelAngle', 'LatG', 'LonG', 'GSum', 'ABSActive', 'RPM']
-        for col in channels:
+    def interp_lap(df):
+        out = pd.DataFrame({'Dist': grid})
+        for col in ['Speed', 'Throttle', 'Brake', 'SteeringWheelAngle', 'LatG', 'LonG', 'GSum', 'ABSActive']:
             if col in df.columns:
-                out[col] = np.interp(grid, df[source_dist_col], df[col])
+                out[col] = np.interp(grid, df['Dist'], df[col])
         return out
 
-    d_dist = 'Distance' if 'Distance' in df_d.columns else 'LapDist'
-    b_dist = 'Distance' if 'Distance' in df_b.columns else 'LapDist'
+    res_d, res_b = interp_lap(df_d), interp_lap(df_b)
     
-    res_d = interp_lap(df_d, d_dist)
-    res_b = interp_lap(df_b, b_dist)
-    
-    # Calculate Time Delta
+    # Precise Time Delta Calculation (dt = ds/v)
     v_d = np.maximum(res_d['Speed'].values / 3.6, 1.0)
     v_b = np.maximum(res_b['Speed'].values / 3.6, 1.0)
     ds = np.diff(grid, prepend=0)
@@ -78,117 +76,94 @@ def align_and_resample(df_d, df_b, points=5000):
     
     return res_d, res_b, grid, delta
 
-# --- 3. THE DRIVER COACH (Logic Heuristics) ---
+# --- 3. THE PHYSICS COACH (Heuristics) ---
 
 def render_driver_coach(res_d, res_b, grid, delta):
-    st.header("🧠 Physics-Based Coaching Audit")
+    st.header("🧠 Driver Coach: Physics Audit")
     
-    # Corner Segmentation (Yaw-based)
+    # Segment by Steering Lock > 15 deg
     is_corner = np.abs(res_d['SteeringWheelAngle']) > 15
-    event_ids = (is_corner != pd.Series(is_corner).shift()).cumsum()
-    
-    events_found = 0
-    for eid in event_ids.unique():
-        idx = event_ids == eid
-        if is_corner[idx].iloc[0] and len(res_d[idx]) > 30:
-            events_found += 1
-            d_ev = res_d[idx]
-            b_ev = res_b[idx]
+    events = (is_corner != pd.Series(is_corner).shift()).cumsum()
+    corner_count = 0
+
+    for eid in events.unique():
+        idx = events == eid
+        if is_corner[idx].iloc[0] and len(res_d[idx]) > 40:
+            corner_count += 1
+            d_ev, b_ev = res_d[idx], res_b[idx]
             
-            # 1. ABS Saturation Check (Entry)
-            abs_mask = (d_ev['ABSActive'] > 0.5) & (np.abs(d_ev['SteeringWheelAngle']) > 20)
-            if abs_mask.any():
-                pct = abs_mask.mean() * 100
+            # PHASE 1: ENTRY (ABS Saturation)
+            abs_entry = (d_ev['ABSActive'] > 0.5) & (np.abs(d_ev['SteeringWheelAngle']) > 20)
+            if abs_entry.any():
                 st.markdown(f"""<div class="critical-card">
-                    <strong>WHAT:</strong> ABS Saturated Turn-In (Corner Event {events_found})<br>
-                    <strong>WHY:</strong> ABS active for {pct:.1f}% of turn-in phase.<br>
-                    <strong>IMPACT:</strong> Kills rotation. You are asking for 100% longitudinal grip while turning. Reduce brake pressure to allow the nose to point.
+                    <strong>EVENT {corner_count} | Entry:</strong> ABS Saturated Turn-In.<br>
+                    <strong>Why:</strong> ABS triggered during steer-loading. <strong>Impact:</strong> Front tires saturated; rotation killed.
                 </div>""", unsafe_allow_html=True)
 
-            # 2. V-Min Displacement (Mid)
-            d_vmin_dist = grid[d_ev['Speed'].idxmin()]
-            b_vmin_dist = grid[b_ev['Speed'].idxmin()]
-            if (d_vmin_dist - b_vmin_dist) < -3.0:
+            # PHASE 2: MID (V-Min Displacement)
+            d_vmin_m = grid[d_ev['Speed'].idxmin()]
+            b_vmin_m = grid[b_ev['Speed'].idxmin()]
+            if (d_vmin_m - b_vmin_m) < -4.0:
                 st.markdown(f"""<div class="coach-card">
-                    <strong>WHAT:</strong> Early Over-Slowing (Corner Event {events_found})<br>
-                    <strong>WHY:</strong> V-Min reached {abs(d_vmin_dist - b_vmin_dist):.1f}m before benchmark apex.<br>
-                    <strong>IMPACT:</strong> "Parking" the car. You are losing rolling momentum. Carry more brake deeper.
+                    <strong>EVENT {corner_count} | Mid:</strong> Early Over-Slowing.<br>
+                    <strong>Why:</strong> V-Min reached {abs(d_vmin_m-b_vmin_m):.1f}m too early. <strong>Impact:</strong> Lost rolling momentum.
                 </div>""", unsafe_allow_html=True)
 
-            # 3. Sawtooth Throttle (Exit)
-            t_rate = np.gradient(d_ev['Throttle'])
-            stabs = np.sum(np.abs(t_rate) > 50) # High frequency detection
-            if stabs > 5:
+            # PHASE 3: EXIT (Sawtooth Smoothness)
+            t_rate = np.abs(np.gradient(d_ev['Throttle']))
+            if np.sum(t_rate > 40) > 8:
                 st.markdown(f"""<div class="critical-card">
-                    <strong>WHAT:</strong> Unstable Platform (Sawtooth Throttle)<br>
-                    <strong>WHY:</strong> High-frequency oscillation detected in exit phase.<br>
-                    <strong>IMPACT:</strong> Pitch oscillations are preventing the rear tires from taking a set. Squeeze, don't stab.
+                    <strong>EVENT {corner_count} | Exit:</strong> Sawtooth Throttle Detected.<br>
+                    <strong>Why:</strong> Rapid pedal oscillations. <strong>Impact:</strong> Pitch instability ruining rear traction.
                 </div>""", unsafe_allow_html=True)
 
-    if events_found == 0:
-        st.info("No significant cornering events detected for analysis.")
-
-# --- 4. SETUP TWEAKER & GARAGE ---
-
-def render_setup_tweaker(res_d, setup_mode):
-    st.header("🔧 Engineering Diagnosis")
-    
-    issue = st.selectbox("Driver Reported Issue", ["None", "Mid-Corner Understeer", "Entry Oversteer", "Braking Instability"])
-    
-    if setup_mode == "Fixed":
-        st.info("Fixed Setup Mode: Adjusting Electronic Maps and Brake Bias only.")
-        if issue == "Braking Instability":
-            st.success(f"Recommendation: Move Brake Bias Forward (Current: {st.session_state.garage['Brake Bias']}%) to 54.8%.")
-        elif issue == "Mid-Corner Understeer":
-            st.warning("Mechanical changes locked. Logic: Adjust ABS Map to lower intrusion (Stage 3) to help rotation.")
-    else:
-        st.success("Open Setup Mode: Mechanical validation active.")
-        if issue == "Mid-Corner Understeer":
-            st.markdown(f"""<div class="setup-card">
-                <strong>Validation:</strong> LatG plateauing while Steering increases.<br>
-                <strong>Action:</strong> Soften Front ARB (Current: {st.session_state.garage['Front ARB']}) or Increase Wing.
-            </div>""", unsafe_allow_html=True)
-
-# --- 5. MAIN APP LOOP ---
+# --- 4. MAIN INTERFACE ---
 
 def main():
     apply_custom_css()
-    st.title("🏎️ Race Engineer Pro | Porsche 992.2 Cup")
+    st.sidebar.title("🛠️ Config")
+    setup_mode = st.sidebar.radio("Setup Rule", ["Fixed", "Open"])
     
-    with st.sidebar:
-        st.header("Config")
-        setup_rule = st.radio("Setup Rule", ["Fixed", "Open"])
-        st.divider()
-        f_d = st.file_uploader("Driver CSV", type=['csv'])
-        f_b = st.file_uploader("Benchmark CSV", type=['csv'])
-        
-    if f_d and f_b:
-        df_d = process_telemetry(pd.read_csv(f_d))
-        df_b = process_telemetry(pd.read_csv(f_b))
-        
-        res_d, res_b, grid, delta = align_and_resample(df_d, df_b)
-        
-        t1, t2, t3, t4 = st.tabs(["📊 Analyze Laps", "🧠 Physics Coach", "🔧 Setup Tweaker", "🛠️ Garage"])
-        
-        with t1:
-            fig = make_subplots(rows=5, cols=1, shared_xaxes=True, vertical_spacing=0.02)
-            fig.add_trace(go.Scatter(x=grid, y=res_b['Speed'], name="Bench", line=dict(color='#ff3344')), row=1, col=1)
-            fig.add_trace(go.Scatter(x=grid, y=res_d['Speed'], name="Driver", line=dict(color='#00a2ff')), row=1, col=1)
-            fig.add_trace(go.Scatter(x=grid, y=res_d['Throttle'], name="Throttle", line=dict(color='#00ff88')), row=2, col=1)
-            fig.add_trace(go.Scatter(x=grid, y=res_d['Brake'], name="Brake", line=dict(color='#ff3344')), row=3, col=1)
-            fig.add_trace(go.Scatter(x=grid, y=res_d['SteeringWheelAngle'], name="Steer", line=dict(color='white')), row=4, col=1)
-            fig.add_trace(go.Scatter(x=grid, y=delta, name="Time Delta", line=dict(color='yellow')), row=5, col=1)
-            fig.update_layout(height=1000, template="plotly_dark", showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
-            
-        with t2: render_driver_coach(res_d, res_b, grid, delta)
-        with t3: render_setup_tweaker(res_d, setup_rule)
-        with t4:
-            st.header("🛠️ Virtual Garage")
-            for key in st.session_state.garage:
-                st.session_state.garage[key] = st.number_input(key, value=float(st.session_state.garage[key]))
-    else:
-        st.info("Please upload Driver and Benchmark CSV files to begin analysis.")
+    f_d = st.sidebar.file_uploader("Driver CSV", type=['csv'])
+    f_b = st.sidebar.file_uploader("Benchmark CSV", type=['csv'])
+
+    try:
+        if f_d and f_b:
+            df_d, df_b = process_telemetry(pd.read_csv(f_d)), process_telemetry(pd.read_csv(f_b))
+        else:
+            df_d, df_b = process_telemetry(pd.read_csv(DEFAULT_DRIVER)), process_telemetry(pd.read_csv(DEFAULT_BENCHMARK))
+            st.sidebar.success("Using Default Zandvoort Laps")
+    except Exception as e:
+        st.error(f"Waiting for Data Ingestion... Error: {e}")
+        return
+
+    res_d, res_b, grid, delta = align_and_resample(df_d, df_b)
+    
+    t1, t2, t3 = st.tabs(["📊 Analyze Laps", "🧠 Driver Coach", "🔧 Setup Tweaker"])
+    
+    with t1:
+        st.metric("Total Time Delta", f"{delta[-1]:.3f}s", delta_color="inverse")
+        fig = make_subplots(rows=5, cols=1, shared_xaxes=True, vertical_spacing=0.02)
+        fig.add_trace(go.Scatter(x=grid, y=res_b['Speed'], name="Bench", line=dict(color='#ff3344')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=grid, y=res_d['Speed'], name="Driver", line=dict(color='#00a2ff')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=grid, y=res_d['Throttle'], name="Throttle", line=dict(color='#00ff88')), row=2, col=1)
+        fig.add_trace(go.Scatter(x=grid, y=res_d['Brake'], name="Brake", line=dict(color='#ff3344')), row=3, col=1)
+        fig.add_trace(go.Scatter(x=grid, y=res_d['SteeringWheelAngle'], name="Steer", line=dict(color='white')), row=4, col=1)
+        fig.add_trace(go.Scatter(x=grid, y=delta, name="Delta", fill='tozeroy', line=dict(color='yellow')), row=5, col=1)
+        fig.update_layout(height=1200, template="plotly_dark", showlegend=False, hovermode="x unified")
+        st.plotly_chart(fig, use_container_width=True)
+
+    with t2: render_driver_coach(res_d, res_b, grid, delta)
+
+    with t3:
+        st.header("🔧 Setup Tweaker")
+        issue = st.selectbox("Issue", ["None", "Mid-Corner Understeer", "Braking Instability"])
+        if setup_mode == "Fixed":
+            st.warning("Fixed Setup Mode: Limited to Brake Bias / Electronic Maps.")
+            if issue == "Braking Instability":
+                st.success("Recommendation: Move Brake Bias Forward (Current: 54.0%) to stabilize entry.")
+        else:
+            st.info("Open Setup Mode: Full mechanical validation active.")
 
 if __name__ == "__main__":
     main()
