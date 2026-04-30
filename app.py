@@ -793,7 +793,7 @@ Give me:
 Keep it direct. No bullet-point overload. Talk to them like a coach in a garage, not a textbook.
 """
 
-                with st.spinner("Analysing your session..."):
+        with st.spinner("Analysing your session..."):
             _model = genai.GenerativeModel("gemini-2.0-flash")
             response = _model.generate_content(prompt)
             st.markdown("### Your Coaching Brief")
