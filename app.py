@@ -1,76 +1,87 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 
-st.set_page_config(page_title="Race Engineer AI", layout="wide")
-
-# --- DATA: SETUP KNOWLEDGE BASE ---
-# Maps specific driver "feelings" to engineering solutions
-SETUP_MATRIX = {
-    "GT3 / GTE": {
-        "Too much 'understeer' on corner entry": "Soften Front Springs or increase Front Aero (Wing).",
-        "The rear 'snaps' when I touch the gas": "Soften Rear Anti-Roll Bar or increase Rear Wing.",
-        "Car feels 'lazy' or slow to turn": "Stiffen Front Springs or increase Front Toe-out.",
-        "Scraping/Bottoming on curbs": "Increase Ride Height (Front and Rear) or stiffen Bumpstops.",
-        "Unstable under heavy braking": "Move Brake Bias forward (+1-2%)."
+# --- SETUP DICTIONARY: SUBJECTIVE TO OBJECTIVE ---
+# This acts as the Engineer's "Brain"
+SETUP_ADVISOR = {
+    "Corner Entry": {
+        "Understeer (Doesn't want to turn)": "Lower Front Ride Height or Soften Front Springs.",
+        "Oversteer (Rear is nervous/slides)": "Move Brake Bias forward or Stiffen Front Compression.",
     },
-    "Formula / High Downforce": {
-        "Understeer in high-speed turns": "Increase Front Wing Angle.",
-        "Oversteer in high-speed turns": "Increase Rear Wing Angle.",
-        "Bottoming at high speed": "Increase Third-Spring (Heave) stiffness.",
-        "Car feels 'darty' and nervous": "Increase Rear Toe-in or decrease Front Wing."
+    "Mid-Corner": {
+        "Understeer (Pushes wide)": "Soften Front Anti-Roll Bar or increase Front Wing.",
+        "Oversteer (Rear feels loose)": "Soften Rear Anti-Roll Bar or increase Rear Wing.",
+    },
+    "Corner Exit": {
+        "Understeer (Pushes wide on gas)": "Soften Front Rebound or increase Rear Compression.",
+        "Oversteer (Snaps when flooring it)": "Soften Rear Springs or increase Rear Toe-in.",
+    },
+    "General / Bumps": {
+        "Car bounces on curbs": "Soften Slow Compression or increase Ride Height.",
+        "Bottoming out on straights": "Increase Spring Rate or add Bumpstop shims.",
     }
 }
 
-# --- TABS SETUP ---
-tab_coach, tab_setup_eng = st.tabs(["🏎️ Driver Coaching", "🔧 Setup Engineer"])
+st.set_page_config(page_title="Chassis Engineering Lab", layout="wide")
 
-with tab_coach:
-    st.subheader("🏁 Live Driver Audit")
-    st.markdown("Focus on the driving. I'll give you your mission.")
-    
-    # [Telemetery processing logic from previous iterations]
-    st.info("Upload your Garage 61 .csv to see your next instruction.")
-    # (The logic seen in image_1e23e4.png would reside here)
+# --- UI HEADER ---
+st.title("🛠️ Chassis Engineering Lab")
+st.markdown("Driver Coaching is disabled. Focus: **Mechanical Compliance & Driveability.**")
 
-with tab_setup_eng:
-    st.subheader("🔧 Engineering & Car Prep")
-    
-    col_input, col_output = st.columns([1, 1])
-    
-    with col_input:
-        st.write("### 🗣️ Driver Feedback")
-        car_type = st.selectbox("Vehicle Category", list(SETUP_MATRIX.keys()))
-        
-        feeling = st.selectbox(
-            "Describe the car's worst behavior:",
-            ["Select the main issue..."] + list(SETUP_MATRIX[car_type].keys())
-        )
-        
-        style_pref = st.select_slider(
-            "Preferred Balance Style",
-            options=["Safe/Understeer", "Neutral", "Aggressive/Oversteer"],
-            value="Neutral"
-        )
-        
-        driver_notes = st.text_area("What else? (e.g., 'Only happens at Turn 7 at Zandvoort')")
-        
-        if st.button("Consult Engineer"):
-            st.session_state.last_consult = feeling
+# --- LAYOUT ---
+col_feedback, col_action = st.columns([1, 1])
 
-    with col_output:
-        st.write("### 🛠️ Mechanical Fix")
-        if 'last_consult' in st.session_state and st.session_state.last_consult != "Select the main issue...":
-            recommendation = SETUP_MATRIX[car_type][st.session_state.last_consult]
-            
-            st.success(f"**Recommended Change:** {recommendation}")
-            
-            # Contextual Logic
-            st.write("---")
-            st.write("**Why this works for your style:**")
-            if style_pref == "Aggressive/Oversteer":
-                st.write("Since you prefer a 'pointy' car, we are prioritizing front-end bite. Be careful with the throttle on exit.")
-            elif style_pref == "Safe/Understeer":
-                st.write("We are adding stability to the rear so you can trust the car more, even if it costs a bit of turn-in speed.")
-            
-            st.caption("Pro Tip: If you make a change and it doesn't help after 3 laps, revert it. Don't 'chase' the setup.")
+with col_feedback:
+    st.subheader("📋 Driver Debrief")
+    st.info("Tell me exactly what you dislike about the current balance.")
+    
+    # 1. Select the Phase
+    phase = st.selectbox("Where is the issue occurring?", list(SETUP_ADVISOR.keys()))
+    
+    # 2. Select the Feeling
+    feeling = st.selectbox("What is the car doing?", list(SETUP_ADVISOR[phase].keys()))
+    
+    # 3. Driving Style Adjustment
+    style = st.radio(
+        "Preferred Driving Style:",
+        ["Pointy/Oversteery (Rotation focus)", "Stable/Understeery (Security focus)", "Balanced"],
+        index=2
+    )
+    
+    notes = st.text_area("Specific Details (e.g., 'Only happens in Turn 3 under trail-braking')")
+
+with col_action:
+    st.subheader("🔧 Engineer's Prescription")
+    
+    # Logic-based recommendation
+    fix = SETUP_ADVISOR[phase][feeling]
+    
+    st.success(f"**Primary Adjustment:** {fix}")
+    
+    # Contextual Tuning
+    st.markdown("---")
+    st.write("### 🧠 The Engineering Logic")
+    if "Understeer" in feeling:
+        st.write("We need to shift the **Mechanical Grip** to the front axle. By softening the front, we allow more weight transfer to load the front tires.")
+    elif "Oversteer" in feeling:
+        st.write("The rear tires are being overwhelmed. We are reducing the rate of weight transfer or increasing downforce to keep the rear planted.")
+
+    # Style-specific tweak
+    if style == "Pointy/Oversteery (Rotation focus)" and "Understeer" in feeling:
+        st.warning("⚠️ **Aggressive Tweak:** Since you like a pointy car, consider also increasing **Rear Ride Height** by 2mm to force the nose down.")
+    
+    st.divider()
+    st.caption("Pro Tip: Check your tire temps. If the middles are hotter than the edges, your pressures are too high, which masks setup issues.")
+
+# --- SETUP LOG ---
+st.header("📝 Setup Change Log")
+if 'log' not in st.session_state: st.session_state.log = []
+
+with st.form("log_form"):
+    change = st.text_input("What did you change?")
+    result = st.text_input("Result (e.g., 'Gained 0.2s', 'Too loose')")
+    if st.form_submit_state("Save Change"):
+        st.session_state.log.append({"Change": change, "Result": result})
+
+if st.session_state.log:
+    st.table(pd.DataFrame(st.session_state.log))
