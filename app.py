@@ -33,8 +33,19 @@ def analyze(df_ref, df_user, official_diff=0.648):
     res = {'dist': grid * 100}
     cols = ['Speed', 'Throttle', 'Brake', 'Gear', 'SteeringWheelAngle']
     for col in cols:
-        res[f'ref_{col.lower()}'] = np.interp(grid, df_ref['LapDistPct'], df_ref[col])
-        res[f'user_{col.lower()}'] = np.interp(grid, df_user['LapDistPct'], df_user[col])
+        # For Gear bruger vi 'previous' for at undgå mærkelige halve gear i skiftene
+        if col == 'Gear':
+            # Vi finder det nærmeste gear uden at lave gennemsnit
+            idx = np.searchsorted(df_user['LapDistPct'], grid)
+            idx = np.clip(idx, 0, len(df_user) - 1)
+            res['user_gear'] = df_user['Gear'].iloc[idx].values
+            
+            idx_ref = np.searchsorted(df_ref['LapDistPct'], grid)
+            idx_ref = np.clip(idx_ref, 0, len(df_ref) - 1)
+            res['ref_gear'] = df_ref['Gear'].iloc[idx_ref].values
+        else:
+            res[f'ref_{col.lower()}'] = np.interp(grid, df_ref['LapDistPct'], df_ref[col])
+            res[f'user_{col.lower()}'] = np.interp(grid, df_user['LapDistPct'], df_user[col])
     
     # Delta fixet til de 0.648s
     track_len = 4252
@@ -44,7 +55,7 @@ def analyze(df_ref, df_user, official_diff=0.648):
     return res
 
 # --- UI ---
-st.title("🏎️ iRacing Telemetry: Garage 61 Layout")
+st.title("🏎️ iRacing Telemetry: Fixed Gear & Steering")
 
 df_ref = load_and_clean_data("Leeroy")
 df_user = load_and_clean_data("Jonas")
@@ -52,13 +63,12 @@ df_user = load_and_clean_data("Jonas")
 if df_ref is not None and df_user is not None:
     data = analyze(df_ref, df_user)
     
-    # Præcis 5-rækket subplot layout
     fig = make_subplots(
-        rows=5, cols=1, 
+        rows=6, cols=1, 
         shared_xaxes=True, 
         vertical_spacing=0.02,
-        row_heights=[0.35, 0.15, 0.15, 0.15, 0.2], # Gør speed størst
-        subplot_titles=("Speed (km/t)", "Time Delta (s)", "Throttle (%)", "Brake (%)", "Gear & Steering")
+        row_heights=[0.3, 0.15, 0.1, 0.1, 0.15, 0.2],
+        subplot_titles=("Speed", "Delta", "Throttle", "Brake", "Gear (Fixed)", "Steering Angle")
     )
 
     # 1. SPEED
@@ -68,23 +78,26 @@ if df_ref is not None and df_user is not None:
     # 2. DELTA
     fig.add_trace(go.Scatter(x=data['dist'], y=data['delta'], name="Delta", fill='tozeroy', line=dict(color='white')), row=2, col=1)
 
-    # 3. THROTTLE (Grøn)
-    fig.add_trace(go.Scatter(x=data['dist'], y=data['ref_throttle']*100, name="Ref Gas", line=dict(color='rgba(0,255,0,0.2)', dash='dot')), row=3, col=1)
-    fig.add_trace(go.Scatter(x=data['dist'], y=data['user_throttle']*100, name="Din Gas", line=dict(color='green')), row=3, col=1)
+    # 3. THROTTLE
+    fig.add_trace(go.Scatter(x=data['dist'], y=data['ref_throttle']*100, line=dict(color='rgba(0,255,0,0.2)', dash='dot'), hoverinfo='skip'), row=3, col=1)
+    fig.add_trace(go.Scatter(x=data['dist'], y=data['user_throttle']*100, name="Gas", line=dict(color='green')), row=3, col=1)
 
-    # 4. BRAKE (Rød)
-    fig.add_trace(go.Scatter(x=data['dist'], y=data['ref_brake']*100, name="Ref Brems", line=dict(color='rgba(255,0,0,0.2)', dash='dot')), row=4, col=1)
-    fig.add_trace(go.Scatter(x=data['dist'], y=data['user_brake']*100, name="Din Brems", fill='tozeroy', line=dict(color='rgba(255,0,0,0.4)')), row=4, col=1)
+    # 4. BRAKE
+    fig.add_trace(go.Scatter(x=data['dist'], y=data['ref_brake']*100, line=dict(color='rgba(255,0,0,0.2)', dash='dot'), hoverinfo='skip'), row=4, col=1)
+    fig.add_trace(go.Scatter(x=data['dist'], y=data['user_brake']*100, name="Brems", fill='tozeroy', line=dict(color='rgba(255,0,0,0.4)')), row=4, col=1)
 
-    # 5. GEAR & STEER (Secondary data)
-    fig.add_trace(go.Scatter(x=data['dist'], y=data['user_gear'], name="Gear", line=dict(color='orange', shape='hv')), row=5, col=1)
-    
-    # Layout styling
-    fig.update_layout(height=1000, template="plotly_dark", hovermode="x unified", showlegend=False)
-    fig.update_yaxes(range=[-5, 105], row=3, col=1) # Lås Throttle
-    fig.update_yaxes(range=[-5, 105], row=4, col=1) # Lås Brake
+    # 5. GEAR (Brug 'hv' for skarpe trin-skift)
+    fig.add_trace(go.Scatter(x=data['dist'], y=data['ref_gear'], name="Leeroy Gear", line=dict(color='cyan', dash='dot', shape='hv')), row=5, col=1)
+    fig.add_trace(go.Scatter(x=data['dist'], y=data['user_gear'], name="Jonas Gear", line=dict(color='orange', shape='hv')), row=5, col=1)
+
+    # 6. STEERING
+    fig.add_trace(go.Scatter(x=data['dist'], y=data['user_steer'], name="Ratvinkel", line=dict(color='yellow')), row=6, col=1)
+
+    fig.update_layout(height=1100, template="plotly_dark", hovermode="x unified", showlegend=False)
+    fig.update_yaxes(range=[-5, 105], row=3, col=1)
+    fig.update_yaxes(range=[-5, 105], row=4, col=1)
+    fig.update_yaxes(dtick=1, row=5, col=1) # Sørger for at y-aksen viser 1, 2, 3 gear trin
     
     st.plotly_chart(fig, use_container_width=True)
-    st.success(f"Viser nu Delta: +0.648s (Fixed)")
 else:
-    st.error("Kunne ikke indlæse filer fra GitHub.")
+    st.error("Data kunne ikke hentes.")
