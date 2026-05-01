@@ -24,7 +24,6 @@ official_diff = time_user - time_ref
 
 st.sidebar.divider()
 st.sidebar.subheader("📍 Zoom & Fokus")
-# Denne slider styrer synkroniseringen mellem kort og grafer
 view_range = st.sidebar.slider("Vælg sektion af banen (%)", 0.0, 100.0, (0.0, 100.0))
 
 @st.cache_data
@@ -41,7 +40,7 @@ def load_and_clean_data(keyword):
                 df = df.drop_duplicates(subset=['LapDistPct']).sort_values(by='LapDistPct')
                 if 'Gear' in df.columns:
                     df['Gear'] = df['Gear'].replace(0, np.nan).ffill().fillna(1)
-                if df['Speed'].max() < 120:
+                if 'Speed' in df.columns and df['Speed'].max() < 120:
                     df['Speed'] = df['Speed'] * 3.6
             return df
     except: return None
@@ -49,18 +48,34 @@ def load_and_clean_data(keyword):
 def analyze(df_ref, df_user, track_len, official_diff):
     grid = np.linspace(0, 1, 6000)
     res = {'dist': grid * 100}
-    cols = ['Speed', 'Throttle', 'Brake', 'Gear', 'SteeringWheelAngle', 'TrackX', 'TrackY']
+    # Liste over kolonner vi gerne vil have
+    cols_to_map = {
+        'Speed': 'speed', 
+        'Throttle': 'throttle', 
+        'Brake': 'brake', 
+        'Gear': 'gear', 
+        'SteeringWheelAngle': 'steer',
+        'TrackX': 'trackx',
+        'TrackY': 'tracky'
+    }
     
-    for col in cols:
-        if col in df_user.columns:
-            short = 'steer' if col == 'SteeringWheelAngle' else col.lower()
-            res[f'ref_{short}'] = np.interp(grid, df_ref['LapDistPct'], df_ref[col]) if col in df_ref.columns else np.zeros(6000)
-            res[f'user_{short}'] = np.interp(grid, df_user['LapDistPct'], df_user[col])
+    for csv_name, short_name in cols_to_map.items():
+        # Find kolonnen (case-insensitive)
+        user_col = next((c for c in df_user.columns if c.lower() == csv_name.lower()), None)
+        ref_col = next((c for c in df_ref.columns if c.lower() == csv_name.lower()), None)
+        
+        if user_col:
+            res[f'user_{short_name}'] = np.interp(grid, df_user['LapDistPct'], df_user[user_col])
+        if ref_col:
+            res[f'ref_{short_name}'] = np.interp(grid, df_ref['LapDistPct'], df_ref[ref_col])
     
-    u_ms, r_ms = np.maximum(res['user_speed']/3.6, 0.5), np.maximum(res['ref_speed']/3.6, 0.5)
-    step = (1/6000) * track_len
-    raw_delta = np.cumsum((step/u_ms) - (step/r_ms))
-    res['delta'] = raw_delta * (official_diff / (raw_delta[-1] if abs(raw_delta[-1]) > 0.01 else 1))
+    # Beregn Delta
+    if 'user_speed' in res and 'ref_speed' in res:
+        u_ms, r_ms = np.maximum(res['user_speed']/3.6, 0.5), np.maximum(res['ref_speed']/3.6, 0.5)
+        step = (1/6000) * track_len
+        raw_delta = np.cumsum((step/u_ms) - (step/r_ms))
+        res['delta'] = raw_delta * (official_diff / (raw_delta[-1] if abs(raw_delta[-1]) > 0.01 else 1))
+    
     return pd.DataFrame(res)
 
 # --- DATA LOAD ---
@@ -70,8 +85,6 @@ df_sess = load_and_clean_data("Offline")
 
 if df_ref is not None and df_user is not None:
     full_data = analyze(df_ref, df_user, track_len, official_diff)
-    
-    # FILTRERING BASERET PÅ SLIDER
     mask = (full_data['dist'] >= view_range[0]) & (full_data['dist'] <= view_range[1])
     data = full_data[mask]
 
@@ -82,25 +95,30 @@ if df_ref is not None and df_user is not None:
 
         with col_map:
             st.subheader("Trackmap")
-            fig_map = go.Figure()
-            # Hele banen som grå linje
-            fig_map.add_trace(go.Scatter(x=full_data['user_trackx'], y=full_data['user_tracky'], 
-                                        line=dict(color='rgba(100,100,100,0.2)', width=2), showlegend=False))
-            # Highlightet sektion
-            fig_map.add_trace(go.Scatter(x=data['user_trackx'], y=data['user_tracky'], 
-                                        line=dict(color=COLOR_JONAS, width=5), name="Valgt Sektion"))
-            fig_map.update_layout(height=400, template="plotly_dark", 
-                                 xaxis=dict(visible=False), yaxis=dict(visible=False, scaleanchor="x", scaleratio=1))
-            st.plotly_chart(fig_map, use_container_width=True)
-            st.caption("💡 Brug slideren i venstre side til at vælge sving.")
+            # Tjek om vi overhovedet har GPS data før vi tegner
+            if 'user_trackx' in full_data.columns and 'user_tracky' in full_data.columns:
+                fig_map = go.Figure()
+                fig_map.add_trace(go.Scatter(x=full_data['user_trackx'], y=full_data['user_tracky'], 
+                                            line=dict(color='rgba(100,100,100,0.2)', width=2), showlegend=False))
+                fig_map.add_trace(go.Scatter(x=data['user_trackx'], y=data['user_tracky'], 
+                                            line=dict(color=COLOR_JONAS, width=5), name="Sektion"))
+                fig_map.update_layout(height=400, template="plotly_dark", 
+                                     xaxis=dict(visible=False), yaxis=dict(visible=False, scaleanchor="x", scaleratio=1))
+                st.plotly_chart(fig_map, use_container_width=True)
+            else:
+                st.warning("⚠️ GPS data mangler i CSV (TrackX/TrackY). Kan ikke vise kort.")
+                st.info("Du kan stadig bruge telemetrien til højre!")
 
         with col_tele:
-            fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.05,
-                               subplot_titles=("Speed", "Delta", "Pedals", "Gear"))
+            fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.05)
             
-            fig.add_trace(go.Scatter(x=data['dist'], y=data['ref_speed'], name="Ref", line=dict(color=COLOR_LEEROY, dash='dot')), row=1, col=1)
+            if 'ref_speed' in data.columns:
+                fig.add_trace(go.Scatter(x=data['dist'], y=data['ref_speed'], name="Ref", line=dict(color=COLOR_LEEROY, dash='dot')), row=1, col=1)
             fig.add_trace(go.Scatter(x=data['dist'], y=data['user_speed'], name="Du", line=dict(color=COLOR_JONAS)), row=1, col=1)
-            fig.add_trace(go.Scatter(x=data['dist'], y=data['delta'], name="Delta", fill='tozeroy', line=dict(color='white')), row=2, col=1)
+            
+            if 'delta' in data.columns:
+                fig.add_trace(go.Scatter(x=data['dist'], y=data['delta'], name="Delta", fill='tozeroy', line=dict(color='white')), row=2, col=1)
+            
             fig.add_trace(go.Scatter(x=data['dist'], y=data['user_throttle']*100, name="Gas", line=dict(color='green')), row=3, col=1)
             fig.add_trace(go.Scatter(x=data['dist'], y=data['user_brake']*100, name="Brems", fill='tozeroy', line=dict(color='rgba(255,0,0,0.3)')), row=3, col=1)
             fig.add_trace(go.Scatter(x=data['dist'], y=data['user_gear'], name="Gear", line=dict(color='orange')), row=4, col=1)
@@ -109,14 +127,19 @@ if df_ref is not None and df_user is not None:
             st.plotly_chart(fig, use_container_width=True)
 
     with tab2:
-        # Samme AI Coach logik, men nu baseret på det zoomede område!
-        st.header("🤖 AI Coach: Sektions-analyse")
-        max_speed = data['user_speed'].max()
-        min_speed = data['user_speed'].min()
-        st.write(f"I denne sektion er din topfart **{max_speed:.1f} km/t** og din laveste fart **{min_speed:.1f} km/t**.")
-        # ... resten af coach logik
+        st.header("🤖 AI Coach Analyse")
+        if 'delta' in data.columns:
+            diffs = np.gradient(full_data['delta'])
+            worst_idx = np.argmax(diffs)
+            st.metric("Total Delta", f"+{official_diff:.3f}s")
+            st.write(f"Du taber mest tid omkring **{full_data['dist'][worst_idx]:.1f}%** af banen.")
+        else:
+            st.write("Indlæs data for at se coach analyse.")
 
     with tab3:
-        # Setup logik fra før
+        # Din setup logik her...
         st.header("🔧 Setup Justering")
-        # ... setup logik
+        st.info("Brug dropdowns til at få råd om bilens balance.")
+
+else:
+    st.error("Data mangler. Tjek at filerne Jonas.csv og Leeroy.csv ligger på GitHub.")
