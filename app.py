@@ -10,108 +10,92 @@ USER = "barefordijegsigerdet-ux"
 REPO = "iracing-engineer"
 BRANCH = "main"
 
-st.set_page_config(page_title="iRacing Ultimate Engineer", layout="wide")
-
-# Sving-navne for Zandvoort (ca. baneposition i %)
-CORNERS = [
-    (5, "Tarzan (T1)"), (15, "Gerlach (T2)"), (22, "Hugenholtz (T3)"),
-    (35, "Hunzerug (T4)"), (45, "Rob Slotemaker (T5)"), (52, "Scheivlak (T7)"),
-    (65, "Masters (T9)"), (75, "Hans Ernst (T11)"), (92, "Arie Luyendyk (T14)")
-]
+st.set_page_config(page_title="iRacing Engineer PRO", layout="wide")
 
 @st.cache_data
-def get_file_list():
+def load_and_clean_data(keyword):
+    """Finder, renser og sorterer telemetri-data."""
     api_url = f"https://api.github.com/repos/{USER}/{REPO}/contents/"
     try:
-        r = requests.get(api_url); return [f['name'] for f in r.json()] if r.status_code == 200 else []
-    except: return []
-
-@st.cache_data
-def load_data_by_keyword(keyword):
-    files = get_file_list()
-    target = next((f for f in files if keyword.lower() in f.lower() and f.endswith('.csv')), None)
-    if target:
-        url = f"https://raw.githubusercontent.com/{USER}/{REPO}/{BRANCH}/{target}".replace(" ", "%20")
-        return pd.read_csv(url)
+        r = requests.get(api_url)
+        files = [f['name'] for f in r.json()]
+        target = next((f for f in files if keyword.lower() in f.lower() and f.endswith('.csv')), None)
+        
+        if target:
+            url = f"https://raw.githubusercontent.com/{USER}/{REPO}/{BRANCH}/{target}".replace(" ", "%20")
+            df = pd.read_csv(url)
+            
+            # --- VIGTIG RENSNING ---
+            # 1. Fjern dubletter i baneposition
+            df = df.drop_duplicates(subset=['LapDistPct'])
+            # 2. Sorter efter baneposition (så grafen ikke hopper tilbage)
+            df = df.sort_values(by='LapDistPct')
+            # 3. Fjern rækker med fejl i farten
+            df = df[df['Speed'] > 0]
+            
+            return df
+    except: return None
     return None
 
-def analyze_data(df_ref, df_user):
-    common_dist = np.linspace(0, 1, 3000)
-    res = {'dist': common_dist * 100}
-    for col in ['Speed', 'Throttle', 'Brake', 'SteeringWheelAngle', 'Gear', 'LatAccel']:
-        res[f'ref_{col.lower()}'] = np.interp(common_dist, df_ref['LapDistPct'], df_ref[col])
-        res[f'user_{col.lower()}'] = np.interp(common_dist, df_user['LapDistPct'], df_user[col])
+def analyze(df_ref, df_user):
+    # Lav et ultra-rent grid med 5000 punkter
+    grid = np.linspace(0, 1, 5000)
     
-    # Delta
+    # Interpolér alle kanaler så de passer sammen
+    res = {'dist': grid * 100}
+    for col in ['Speed', 'Throttle', 'Brake', 'Gear']:
+        res[f'ref_{col.lower()}'] = np.interp(grid, df_ref['LapDistPct'], df_ref[col])
+        res[f'user_{col.lower()}'] = np.interp(grid, df_user['LapDistPct'], df_user[col])
+    
+    # Præcis Delta (Zandvoort 4252m)
     track_len = 4252
-    dist_step = (1/3000) * track_len
-    delta_steps = (dist_step / np.maximum(res['user_speed']/3.6, 0.5)) - (dist_step / np.maximum(res['ref_speed']/3.6, 0.5))
-    res['delta'] = np.cumsum(delta_steps)
+    step = (1/5000) * track_len
+    u_ms = np.maximum(res['user_speed']/3.6, 0.5)
+    r_ms = np.maximum(res['ref_speed']/3.6, 0.5)
+    res['delta'] = np.cumsum((step/u_ms) - (step/r_ms))
+    
     return res
 
 # --- UI ---
-st.title("🏎️ iRacing Ultimate Engineer")
+st.title("🏎️ iRacing Telemetry: Jonas vs. Leeroy")
 
-df_ref = load_data_by_keyword("Leeroy")
-df_user = load_data_by_keyword("Jonas")
-df_sess = load_data_by_keyword("Offline Testing")
+df_ref = load_and_clean_data("Leeroy")
+df_user = load_and_clean_data("Jonas")
+df_sess = load_and_clean_data("Offline Testing")
 
 if df_ref is not None and df_user is not None:
-    data = analyze_data(df_ref, df_user)
+    data = analyze(df_ref, df_user)
     
-    # Dashboard
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Delta til Leeroy", f"+{data['delta'][-1]:.3f}s", delta_color="inverse")
-    if df_sess is not None:
+    # Metrics
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Delta til Leeroy", f"+{data['delta'][-1]:.3f}s", delta_color="inverse")
+    if df_sess is not None and 'Sector 1' in df_sess.columns:
         opt = df_sess['Sector 1'].min() + df_sess['Sector 2'].min() + df_sess['Sector 3'].min()
-        m2.metric("Optimal Lap", f"{opt:.3f}s")
-        m3.metric("Bane Temp", f"{df_sess['Track temp'].iloc[-1]:.1f}°C")
-    m4.metric("Max Lateral G", f"{abs(data['user_lataccel']).max()/9.81:.2f} G")
+        c2.metric("Din Optimal Lap", f"{opt:.3f}s")
+    c3.metric("Bane Temp", f"{df_sess['Track temp'].iloc[-1] if df_sess is not None else 'N/A'}°C")
 
-    tabs = st.tabs(["🚀 Speed/Delta", "☸️ Steering & G's", "🎮 Pedals/Gear", "🤖 Pro Coach"])
+    # Grafer
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.02,
+                       row_heights=[0.5, 0.2, 0.3],
+                       subplot_titles=("Hastighed (km/t)", "Tid Tabt/Vundet (s)", "Pedaler & Gear"))
 
-    with tabs[0]:
-        fig1 = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
-        fig1.add_trace(go.Scatter(x=data['dist'], y=data['ref_speed'], name="Leeroy", line=dict(color='cyan')), row=1, col=1)
-        fig1.add_trace(go.Scatter(x=data['dist'], y=data['user_speed'], name="Jonas", line=dict(color='red')), row=1, col=1)
-        fig1.add_trace(go.Scatter(x=data['dist'], y=data['delta'], name="Delta", fill='tozeroy', line=dict(color='white')), row=2, col=1)
-        # Tilføj sving-navne som vertikale linjer
-        for pos, name in CORNERS:
-            fig1.add_vline(x=pos, line_width=1, line_dash="dash", line_color="gray")
-        fig1.update_layout(height=600, template="plotly_dark", hovermode="x unified")
-        st.plotly_chart(fig1, use_container_width=True)
+    # Hastighed
+    fig.add_trace(go.Scatter(x=data['dist'], y=data['ref_speed'], name="Leeroy", line=dict(color='cyan', width=1)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=data['dist'], y=data['user_speed'], name="Jonas", line=dict(color='red', width=2)), row=1, col=1)
+    
+    # Delta
+    fig.add_trace(go.Scatter(x=data['dist'], y=data['delta'], name="Delta", fill='tozeroy', line=dict(color='white')), row=2, col=1)
+    
+    # Pedaler
+    fig.add_trace(go.Scatter(x=data['dist'], y=data['user_throttle']*100, name="Gas", line=dict(color='#2ecc71')), row=3, col=1)
+    fig.add_trace(go.Scatter(x=data['dist'], y=data['user_brake']*100, name="Brems", fill='tozeroy', line=dict(color='rgba(231, 76, 60, 0.5)')), row=3, col=1)
+    
+    # Gear (skaleret så det passer i bunden af pedal-grafen)
+    fig.add_trace(go.Scatter(x=data['dist'], y=data['user_gear']*10, name="Gear (x10)", line=dict(color='white', dash='dot')), row=3, col=1)
 
-    with tabs[1]:
-        fig2 = make_subplots(rows=2, cols=1, shared_xaxes=True)
-        fig2.add_trace(go.Scatter(x=data['dist'], y=data['user_steeringwheelangle'], name="Ratvinkel", line=dict(color='yellow')), row=1, col=1)
-        fig2.add_trace(go.Scatter(x=data['dist'], y=data['user_lataccel']/9.81, name="G-Force", line=dict(color='orange')), row=2, col=1)
-        fig2.update_layout(height=600, template="plotly_dark")
-        st.plotly_chart(fig2, use_container_width=True)
-
-    with tabs[2]:
-        fig3 = make_subplots(rows=2, cols=1, shared_xaxes=True)
-        fig3.add_trace(go.Scatter(x=data['dist'], y=data['user_throttle']*100, name="Gas", line=dict(color='green')), row=1, col=1)
-        fig3.add_trace(go.Scatter(x=data['dist'], y=data['user_brake']*100, name="Brems", line=dict(color='red')), row=1, col=1)
-        fig3.add_trace(go.Scatter(x=data['dist'], y=data['user_gear'], name="Gear", line=dict(color='white', shape='hv')), row=2, col=1)
-        fig3.update_layout(height=600, template="plotly_dark")
-        st.plotly_chart(fig3, use_container_width=True)
-
-    with tabs[3]:
-        st.header("🤖 Race Engineer Notes")
-        loss = np.diff(data['delta'])
-        worst_idx = np.argmax(loss)
-        worst_pos = data['dist'][worst_idx]
-        
-        # Find nærmeste sving-navn
-        corner_name = next((name for pos, name in reversed(CORNERS) if pos <= worst_pos), "Start/Finish")
-        
-        st.error(f"📍 Største tidstab fundet ved **{corner_name}**.")
-        st.write(f"Du taber tid her, fordi din minimumshastighed er {data['ref_speed'][worst_idx] - data['user_speed'][worst_idx]:.1f} km/t lavere end Leeroys.")
-        
-        st.divider()
-        st.subheader("💡 Kørestils-tip")
-        if data['user_brake'].max() > 0.98:
-            st.warning("Du låser ABS-systemet (100% brems). Prøv at bremse hårdt (85%), men slip bremsen gradvist tidligere (Trail braking) for at få bilen til at rotere bedre ind i svinget.")
+    fig.update_layout(height=800, template="plotly_dark", hovermode="x unified", showlegend=False)
+    fig.update_yaxes(range=[0, 105], row=3, col=1)
+    st.plotly_chart(fig, use_container_width=True)
 
 else:
-    st.info("Venter på at finde 'Jonas', 'Leeroy' og 'Offline' filer på GitHub...")
+    st.warning("Finder filer på GitHub... Sørg for at 'Jonas' og 'Leeroy' csv-filerne er uploadet.")
