@@ -25,12 +25,14 @@ def load_and_clean_data(keyword):
         if target:
             url = f"https://raw.githubusercontent.com/{USER}/{REPO}/{BRANCH}/{target}".replace(" ", "%20")
             df = pd.read_csv(io.StringIO(requests.get(url).text))
+            
+            # Sørg for at vi har LapDistPct til interpolation
             if 'LapDistPct' in df.columns:
                 df = df.drop_duplicates(subset=['LapDistPct']).sort_values(by='LapDistPct')
-                # Gear fix (ffill)
+                # Fix Gear
                 if 'Gear' in df.columns:
                     df['Gear'] = df['Gear'].replace(0, np.nan).ffill().fillna(1)
-                # Hastighed km/t
+                # Hastighedskonvertering hvis nødvendigt
                 if df['Speed'].max() < 100:
                     df['Speed'] = df['Speed'] * 3.6
             return df
@@ -39,18 +41,22 @@ def load_and_clean_data(keyword):
 def analyze(df_ref, df_user, official_diff=0.648):
     grid = np.linspace(0, 1, 6000)
     res = {'dist': grid * 100}
+    # Kolonner vi forventer i filerne
     cols = ['Speed', 'Throttle', 'Brake', 'Gear', 'SteeringWheelAngle']
+    
     for col in cols:
         short = 'steer' if col == 'SteeringWheelAngle' else col.lower()
+        # Vi tvinger interpolation for BEGGE kørere her
         res[f'ref_{short}'] = np.interp(grid, df_ref['LapDistPct'], df_ref[col])
         res[f'user_{short}'] = np.interp(grid, df_user['LapDistPct'], df_user[col])
     
-    # Delta beregning
+    # Delta beregning (Zandvoort baseline)
     track_len = 4252
     step = (1/6000) * track_len
-    u_ms, r_ms = np.maximum(res['user_speed']/3.6, 0.5), np.maximum(res['ref_speed']/3.6, 0.5)
+    u_ms = np.maximum(res['user_speed']/3.6, 0.5)
+    r_ms = np.maximum(res['ref_speed']/3.6, 0.5)
     raw_delta = np.cumsum((step/u_ms) - (step/r_ms))
-    res['delta'] = raw_delta * (official_diff / raw_delta[-1])
+    res['delta'] = raw_delta * (official_diff / (raw_delta[-1] if raw_delta[-1] != 0 else 1))
     return res
 
 # --- DATA LOAD ---
@@ -66,68 +72,72 @@ if df_ref is not None and df_user is not None:
     tab1, tab2, tab3 = st.tabs(["📊 Telemetri", "🤖 AI Coach", "🔧 Garage & Setup"])
 
     with tab1:
-        # Fuld sammenligning (Overlay)
-        fig = make_subplots(rows=5, cols=1, shared_xaxes=True, vertical_spacing=0.02,
-                           row_heights=[0.35, 0.15, 0.15, 0.15, 0.2])
+        # 6 separate rækker men med overlay på de relevante
+        fig = make_subplots(rows=6, cols=1, shared_xaxes=True, vertical_spacing=0.02,
+                           row_heights=[0.3, 0.15, 0.1, 0.1, 0.1, 0.25],
+                           subplot_titles=("Hastighed (km/t)", "Delta (s)", "Gas (%)", "Brems (%)", "Gear", "Ratvinkel"))
         
-        # Speed Overlay
-        fig.add_trace(go.Scatter(x=data['dist'], y=data['ref_speed'], name="Leeroy (Ref)", line=dict(color=COLOR_LEEROY, dash='dot')), row=1, col=1)
+        # 1. Speed Overlay
+        fig.add_trace(go.Scatter(x=data['dist'], y=data['ref_speed'], name="Leeroy (Ref)", line=dict(color=COLOR_LEEROY, dash='dot', width=1)), row=1, col=1)
         fig.add_trace(go.Scatter(x=data['dist'], y=data['user_speed'], name="Jonas (Du)", line=dict(color=COLOR_JONAS, width=2)), row=1, col=1)
         
-        # Delta
-        fig.add_trace(go.Scatter(x=data['dist'], y=data['delta'], name="Tidstab", fill='tozeroy', line=dict(color='white')), row=2, col=1)
+        # 2. Delta
+        fig.add_trace(go.Scatter(x=data['dist'], y=data['delta'], name="Delta", fill='tozeroy', line=dict(color='white')), row=2, col=1)
         
-        # Throttle & Brake (Combined for Jonas, Shadow for Leeroy)
-        fig.add_trace(go.Scatter(x=data['dist'], y=data['ref_throttle']*100, name="L. Throttle", line=dict(color='rgba(0,255,0,0.15)', dash='dot')), row=3, col=1)
-        fig.add_trace(go.Scatter(x=data['dist'], y=data['user_throttle']*100, name="J. Throttle", line=dict(color='green')), row=3, col=1)
-        fig.add_trace(go.Scatter(x=data['dist'], y=data['user_brake']*100, name="J. Brake", fill='tozeroy', line=dict(color='rgba(255,0,0,0.3)')), row=3, col=1)
+        # 3. Gas Overlay
+        fig.add_trace(go.Scatter(x=data['dist'], y=data['ref_throttle']*100, name="Leeroy Gas", line=dict(color='rgba(0,255,255,0.2)', dash='dot')), row=3, col=1)
+        fig.add_trace(go.Scatter(x=data['dist'], y=data['user_throttle']*100, name="Jonas Gas", line=dict(color='green')), row=3, col=1)
         
-        # Gear Overlay
-        fig.add_trace(go.Scatter(x=data['dist'], y=data['ref_gear'], name="L. Gear", line=dict(color=COLOR_LEEROY, dash='dot', shape='hv')), row=4, col=1)
-        fig.add_trace(go.Scatter(x=data['dist'], y=data['user_gear'], name="J. Gear", line=dict(color='orange', shape='hv')), row=4, col=1)
+        # 4. Brems Overlay
+        fig.add_trace(go.Scatter(x=data['dist'], y=data['ref_brake']*100, name="Leeroy Brems", line=dict(color='rgba(0,255,255,0.2)', dash='dot')), row=4, col=1)
+        fig.add_trace(go.Scatter(x=data['dist'], y=data['user_brake']*100, name="Jonas Brems", fill='tozeroy', line=dict(color='rgba(255,0,0,0.3)')), row=4, col=1)
         
-        # Steering
-        fig.add_trace(go.Scatter(x=data['dist'], y=data['user_steer'], name="Ratvinkel", line=dict(color='yellow')), row=5, col=1)
+        # 5. Gear Overlay
+        fig.add_trace(go.Scatter(x=data['dist'], y=data['ref_gear'], name="Leeroy Gear", line=dict(color=COLOR_LEEROY, dash='dot', shape='hv')), row=5, col=1)
+        fig.add_trace(go.Scatter(x=data['dist'], y=data['user_gear'], name="Jonas Gear", line=dict(color='orange', shape='hv')), row=5, col=1)
+        
+        # 6. Ratvinkel
+        fig.add_trace(go.Scatter(x=data['dist'], y=data['ref_steer'], name="Leeroy Rat", line=dict(color='rgba(0,255,255,0.2)', dash='dot')), row=6, col=1)
+        fig.add_trace(go.Scatter(x=data['dist'], y=data['user_steer'], name="Jonas Rat", line=dict(color='yellow')), row=6, col=1)
 
-        fig.update_layout(height=1000, template="plotly_dark", hovermode="x unified")
+        fig.update_layout(height=1200, template="plotly_dark", hovermode="x unified", showlegend=True)
         st.plotly_chart(fig, use_container_width=True)
 
     with tab2:
-        st.header("🤖 AI Coach: Jonas vs Leeroy")
-        # Find punktet med største tidstab
-        loss_idx = np.argmax(np.gradient(data['delta']))
-        loss_dist = data['dist'][loss_idx]
+        st.header("🤖 AI Coach Analyse")
+        # Beregn tidstabspunkter
+        diffs = np.gradient(data['delta'])
+        worst_idx = np.argmax(diffs)
         
-        col1, col2 = st.columns(2)
-        col1.metric("Delta Total", f"+{data['delta'][-1]:.3f}s", delta="-0.648s")
-        col2.warning(f"Kritisk zone identificeret ved {loss_dist:.1f}%")
-
+        c1, c2 = st.columns(2)
+        c1.metric("Current Delta", f"+{data['delta'][-1]:.3f}s", delta="-0.648s")
+        c2.warning(f"Fokus-område: {data['dist'][worst_idx]:.1f}% af banen")
+        
         st.markdown(f"""
-        ### 📋 Analyse af kørsel
-        1. **Hastighedstjek:** Leeroy rammer **{np.max(data['ref_speed']):.1f} km/t** på langsiden. Du rammer **{np.max(data['user_speed']):.1f} km/t**.
-        2. **Sving-Analyse:** Ved banens {loss_dist:.1f}% mærke (Sving 1/2) taber du mest tid. 
-        3. **Gearvalg:** Leeroy kører i gear **{int(data['ref_gear'][loss_idx])}** her, mens du er i gear **{int(data['user_gear'][loss_idx])}**.
-        4. **Input:** Du bruger i gennemsnit **{np.mean(data['user_steer']):.1f}°** rat, hvor Leeroy bruger **{np.mean(data['ref_steer']):.1f}°**. Mere rat = mere dækslid.
+        ### 📋 Dine vigtigste fokuspunkter:
+        * **Topfart:** Din topfart er **{np.max(data['user_speed']):.1f} km/t**, mens Leeroy rammer **{np.max(data['ref_speed']):.1f} km/t**.
+        * **Sving-Analyse:** Du taber mest tid ved banens {data['dist'][worst_idx]:.1f}% mærke. 
+        * **Gear-forskel:** Leeroy bruger gear **{int(data['ref_gear'][worst_idx])}** i svinget, du bruger gear **{int(data['user_gear'][worst_idx])}**.
+        * **Rat-input:** Du bruger i gennemsnit **{np.mean(np.abs(data['user_steer'])):.1f}°** ratvinkel. Prøv at mindske dette for at undgå understyring.
         """)
 
     with tab3:
-        st.header("🔧 Garage & Session Setup")
+        st.header("🔧 Garage & Setup")
         if df_sess is not None:
+            # Metadata fra Offline filen
             m1, m2, m3 = st.columns(3)
-            # Hent metadata fra din Offline log
-            track_t = df_sess['Track temp'].iloc[0] if 'Track temp' in df_sess.columns else "N/A"
-            air_t = df_sess['Air temp'].iloc[0] if 'Air temp' in df_sess.columns else "N/A"
-            fuel_avg = df_sess['Fuel used'].mean() if 'Fuel used' in df_sess.columns else 0
+            t_temp = df_sess['Track temp'].iloc[0] if 'Track temp' in df_sess.columns else "N/A"
+            a_temp = df_sess['Air temp'].iloc[0] if 'Air temp' in df_sess.columns else "N/A"
+            fuel = df_sess['Fuel used'].mean() if 'Fuel used' in df_sess.columns else 0
             
-            m1.metric("Bane Temperatur", f"{track_t}")
-            m2.metric("Luft Temperatur", f"{air_t}")
-            m3.metric("Avg Fuel/Lap", f"{fuel_avg:.2f} L")
+            m1.metric("Bane Temperatur", f"{t_temp}")
+            m2.metric("Luft Temperatur", f"{a_temp}")
+            m3.metric("Avg. Fuel/Lap", f"{fuel:.2f} L")
             
             st.divider()
-            st.subheader("Session Log (Sidste 10 omgange)")
-            st.dataframe(df_sess[['Lap', 'Lap time', 'Fuel used', 'Started at']].tail(10), use_container_width=True)
+            st.subheader("Sidste 5 Session Laps")
+            st.dataframe(df_sess[['Lap', 'Lap time', 'Fuel used']].tail(5), use_container_width=True)
         else:
-            st.info("Ingen Offline/Session data fundet. Upload 'Offline Analysis' CSV for at se setup data.")
-
+            st.info("Ingen session-log fundet (Offline fil).")
 else:
-    st.error("Kunne ikke finde Jonas.csv eller Leeroy.csv på GitHub.")
+    st.error("Kunne ikke finde Jonas.csv og Leeroy.csv. Tjek filnavne på GitHub.")
