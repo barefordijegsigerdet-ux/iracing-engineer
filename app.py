@@ -9,7 +9,7 @@ import google.generativeai as genai
 # --- 1. SETUP & AI CONFIGURATION ---
 st.set_page_config(page_title="iRacing Universal Coach", layout="wide")
 
-# Vi bruger SYSTEM_INSTRUCTION til at definere AI'ens personlighed
+# Din professionelle System Instruction
 SYSTEM_INSTRUCTION = """
 You are a professional, data-driven Race Engineer and Driver Coach. Your goal is to identify time loss and optimize driver performance across any car and track combination in iRacing.
 
@@ -20,25 +20,28 @@ Core Directives:
 4. Consistency: Identify 'spiky' inputs.
 5. Benchmarking: Compare User vs. Reference input timing and intensity.
 
-Style: Concise, technical, and honest. Separate Technical Errors from Input Issues.
+Style: Concise, technical, and honest. Separate Technical Errors from Input Issues. Use "Less brake, more roll" philosophy for high-speed corners.
 """
 
-# --- RETTELSE AF MODELNAVNET ---
+# Initialisering med Gemini 3 / Latest Alias
 if "GOOGLE_API_KEY" in st.secrets:
-    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    
-    # Vi skifter til Gemini 3 Flash Preview som findes i din liste
-    # Du kan også bruge 'gemini-flash-latest' for altid at have den nyeste
-    model = genai.GenerativeModel('gemini-3-flash-preview', system_instruction=SYSTEM_INSTRUCTION)
+    try:
+        genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+        # Vi bruger 'gemini-flash-latest' for at ramme Gemini 3 Flash automatisk
+        model = genai.GenerativeModel('gemini-flash-latest', system_instruction=SYSTEM_INSTRUCTION)
+    except Exception as e:
+        st.error(f"Fejl ved konfiguration af AI: {e}")
+        model = None
 else:
-    st.warning("⚠️ API nøgle ikke fundet.")
+    st.warning("⚠️ API nøgle (GOOGLE_API_KEY) ikke fundet i Secrets.")
+    model = None
 
-# --- 2. GITHUB CONFIGURATION ---
+# --- 2. GITHUB CONFIG ---
 USER = "barefordijegsigerdet-ux"
 REPO = "iracing-engineer"
 BRANCH = "main"
 
-# --- 3. HELPER FUNCTIONS ---
+# --- 3. FUNKTIONER ---
 @st.cache_data
 def load_data(name):
     if not name: return None
@@ -59,38 +62,39 @@ def load_data(name):
 
 def get_ai_analysis(u_stats, r_stats, zone_name):
     if model is None:
-        return "AI Coach er ikke tilgængelig (mangler API nøgle)."
+        return "AI Coach er ikke tilgængelig."
         
     prompt = f"""
-    Analyse af {zone_name}:
-    Bruger (Jonas): vMin={u_stats['vmin']} km/t, Peak Brake={u_stats['p_brake']}%, Throttle Pickup={u_stats['t_pickup']}% af zonen.
-    Reference (Leeroy): vMin={r_stats['vmin']} km/t, Peak Brake={r_stats['p_brake']}%, Throttle Pickup={r_stats['t_pickup']}% af zonen.
+    Analyse: Jonas vs. Leeroy
+    Sektor: {zone_name}
     
-    Forklar hvorfor Jonas taber tid, og giv præcis teknisk instruks baseret på dine Core Directives.
+    Data:
+    Jonas: vMin={u_stats['vmin']} km/t, Peak Brake={u_stats['p_brake']}%, Throttle Start={u_stats['t_pickup']}%
+    Leeroy (Ref): vMin={r_stats['vmin']} km/t, Peak Brake={r_stats['p_brake']}%, Throttle Start={r_stats['t_pickup']}%
+    
+    Lever en analyse opdelt i: 1. Tekniske Fejl, 2. Input Problemer og 3. Tekniske Instrukser.
     """
     try:
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        return f"Kunne ikke hente analyse fra Google: {str(e)}"
+        return f"Fejl fra Gemini 3: {str(e)}"
 
-# --- 4. SIDEBAR ---
+# --- 4. UI & LOGIK ---
 with st.sidebar:
     st.header("📂 Data Setup")
     u_file = st.text_input("Din fil (CSV):", "jonas.csv")
     r_file = st.text_input("Reference fil (CSV):", "leeroy.csv")
     st.divider()
-    sensitivity = st.slider("Coach Følsomhed (tidstab)", 0.05, 0.50, 0.10)
+    sensitivity = st.slider("Coach Følsomhed", 0.05, 0.50, 0.10)
     t_len = st.number_input("Banelængde (m)", value=4252)
 
-# --- 5. MAIN ANALYSIS LOGIC ---
 df_u = load_data(u_file)
 df_r = load_data(r_file)
 
 if df_u is not None and df_r is not None:
-    st.title("🤖 Universal AI Coach")
+    st.title("🤖 Universal AI Coach (Gemini 3 Edition)")
     
-    # Interpolation for præcis sammenligning
     grid = np.linspace(0, 1, 2000)
     data = pd.DataFrame({'dist_pct': grid * 100})
     
@@ -98,41 +102,35 @@ if df_u is not None and df_r is not None:
         if col in df_u.columns: data[f'u_{k}'] = np.interp(grid, df_u['lapdistpct'], df_u[col])
         if col in df_r.columns: data[f'r_{k}'] = np.interp(grid, df_r['lapdistpct'], df_r[col])
     
-    # Beregning af Delta
     u_ms = np.maximum(data['u_speed']/3.6, 1.0)
     r_ms = np.maximum(data['r_speed']/3.6, 1.0)
     data['delta'] = np.cumsum(((1/2000)*t_len)/u_ms - ((1/2000)*t_len)/r_ms)
     data['delta_diff'] = data['delta'].diff().fillna(0)
 
-    # Visning af tids-tab zoner
     for i in range(0, 100, 5):
         mask = (data['dist_pct'] >= i) & (data['dist_pct'] < i+5)
         z = data[mask]
         loss = z['delta_diff'].sum()
         
         if loss > sensitivity:
-            u_stats = {'vmin': round(z['u_speed'].min()*3.6, 1), 'p_brake': int(z['u_brk'].max()*100), 't_pickup': i}
-            r_stats = {'vmin': round(z['r_speed'].min()*3.6, 1), 'p_brake': int(z['r_brk'].max()*100), 't_pickup': i}
+            u_s = {'vmin': round(z['u_speed'].min()*3.6, 1), 'p_brake': int(z['u_brk'].max()*100), 't_pickup': i}
+            r_s = {'vmin': round(z['r_speed'].min()*3.6, 1), 'p_brake': int(z['r_brk'].max()*100), 't_pickup': i}
             
             with st.expander(f"🚩 Tab i Zone {i}% - {i+5}% : {loss:.3f}s"):
-                col1, col2 = st.columns([1, 2])
-                with col1:
-                    st.metric("Din vMin", f"{u_stats['vmin']} km/t")
-                    st.metric("Ref vMin", f"{r_stats['vmin']} km/t", delta=round(u_stats['vmin'] - r_stats['vmin'], 1))
-                with col2:
-                    if st.button(f"Få AI Analyse", key=f"btn_{i}"):
-                        with st.spinner("Analyserer telemetry..."):
-                            advice = get_ai_analysis(u_stats, r_stats, f"Zone ved {i}%")
-                            st.info(advice)
-                            
-    # Track Map
+                c1, c2 = st.columns([1, 2])
+                with c1:
+                    st.metric("Din vMin", f"{u_s['vmin']} km/t")
+                    st.metric("Ref vMin", f"{r_s['vmin']} km/t", delta=round(u_s['vmin'] - r_s['vmin'], 1))
+                with c2:
+                    if st.button(f"Kør Analyse", key=f"btn_{i}"):
+                        with st.spinner("Gemini 3 tænker..."):
+                            st.markdown(get_ai_analysis(u_s, r_s, f"Zone {i}%"))
+
     if 'u_tx' in data.columns:
         st.divider()
-        st.subheader("📍 Bane Oversigt")
         map_fig = go.Figure()
-        map_fig.add_trace(go.Scatter(x=data['u_tx'], y=data['u_ty'], line=dict(color='white', width=2), name="Bane"))
+        map_fig.add_trace(go.Scatter(x=data['u_tx'], y=data['u_ty'], line=dict(color='white', width=2)))
         map_fig.update_layout(template="plotly_dark", height=400, xaxis=dict(visible=False), yaxis=dict(visible=False, scaleanchor="x"))
         st.plotly_chart(map_fig, use_container_width=True)
-
 else:
-    st.info("👋 Klar til kørsel! Sørg for at 'jonas.csv' og 'leeroy.csv' er i dit GitHub repo.")
+    st.info("Klar til data. Tjek at jonas.csv og leeroy.csv ligger i dit repo.")
