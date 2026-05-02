@@ -7,6 +7,7 @@ import requests
 import io
 import google.generativeai as genai
 
+st.write("Kan se nøgle:", "GOOGLE_API_KEY" in st.secrets)
 # --- KONFIGURATION & AI SETUP ---
 st.set_page_config(page_title="iRacing Universal Coach", layout="wide")
 
