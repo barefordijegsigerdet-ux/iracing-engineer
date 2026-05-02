@@ -11,8 +11,10 @@ r_file = st.sidebar.file_uploader("Upload Reference Lap (CSV)", type="csv")
 
 if u_file and r_file:
     with st.spinner("Analyzing telemetry..."):
-        u_df = load_and_process_data(u_file)
-        r_df = load_and_process_data(r_file)
+        # This one line now handles both files based on our new ingestion.py
+        u_df, r_df = load_and_process_data(u_file, r_file)
+        
+        # Then proceed with physics
         u_df, r_df = calculate_physics_metrics(u_df, r_df)
 
     t1, t2, t3, t4 = st.tabs(["📊 Telemetry", "🗺️ Driving Line", "🏎️ Tire Usage", "🧠 AI Coach"])
