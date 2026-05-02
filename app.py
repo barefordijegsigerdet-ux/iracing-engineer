@@ -30,7 +30,10 @@ if u_file and r_file:
         c2.table(get_sector_analysis(u_df))
 
     with t3:
-        if u_df["lat"].sum() != 0:
+        # Check if GPS data is valid and not just all zeros
+        has_gps = "lat" in u_df.columns and "lon" in u_df.columns and u_df["lat"].abs().sum() > 0
+        
+        if has_gps:
             st.plotly_chart(create_track_map(u_df), use_container_width=True)
         else:
-            st.info("No GPS data found for this track.")
+            st.info("🛰️ No valid GPS data (Lat/Lon) found in this telemetry file.")
