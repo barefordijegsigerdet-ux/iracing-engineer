@@ -2,33 +2,47 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 def create_main_telemetry(user_df, ref_df):
-    fig = make_subplots(rows=5, cols=1, shared_xaxes=True, vertical_spacing=0.02,
-                        subplot_titles=("Speed", "Delta", "Throttle", "Brake", "G-Sum"))
+    fig = make_subplots(
+        rows=5, cols=1, 
+        shared_xaxes=True, 
+        vertical_spacing=0.02,
+        subplot_titles=("Speed (km/h)", "Delta (s)", "Throttle (%)", "Brake (%)", "G-Sum (G)")
+    )
     
-    dist = user_df["distance"]
-    # Add Speed
-    fig.add_trace(go.Scatter(x=ref_df["distance"], y=ref_df["speed"], name="Ref", line=dict(color="#FF4B4B")), row=1, col=1)
-    fig.add_trace(go.Scatter(x=dist, y=user_df["speed"], name="You", line=dict(color="#1C83E1")), row=1, col=1)
-    
-    # Add Delta with fill
-    fig.add_trace(go.Scatter(x=dist, y=user_df["delta"], fill='tozeroy', line=dict(color="white")), row=2, col=1)
-    
-    # Add Controls
-    fig.add_trace(go.Scatter(x=dist, y=user_df["throttle"], line=dict(color="#1C83E1")), row=3, col=1)
-    fig.add_trace(go.Scatter(x=dist, y=user_df["brake"], line=dict(color="#FF4B4B")), row=4, col=1)
-    fig.add_trace(go.Scatter(x=dist, y=user_df["g_sum"], line=dict(color="#1C83E1")), row=5, col=1)
-    
-    fig.update_layout(height=1000, template="plotly_dark", showlegend=False)
-    return fig
+    # Distance is our X-axis
+    u_dist = user_df["distance"]
+    r_dist = ref_df["distance"]
 
-def create_friction_circle(user_df, ref_df):
-    fig = go.Figure()
-    fig.add_trace(go.Scattergl(x=ref_df["lataccel"], y=ref_df["longaccel"], mode='markers', name='Ref', marker=dict(color='#FF4B4B', opacity=0.3, size=3)))
-    fig.add_trace(go.Scattergl(x=user_df["lataccel"], y=user_df["longaccel"], mode='markers', name='You', marker=dict(color='#1C83E1', opacity=0.5, size=3)))
-    fig.update_layout(title="Friction Circle (G-G)", template="plotly_dark", height=450, width=450, 
-                      xaxis=dict(range=[-3,3], title="Lateral G"), yaxis=dict(range=[-3,3], title="Longitudinal G"))
-    return fig
+    # Helper to add both traces to a row
+    def add_dual_trace(user_data, ref_data, row_idx):
+        # Add Reference (Red)
+        fig.add_trace(go.Scatter(x=r_dist, y=ref_data, name="Reference", 
+                                 line=dict(color="#FF4B4B", width=1.5), opacity=0.8), row=row_idx, col=1)
+        # Add User (Blue)
+        fig.add_trace(go.Scatter(x=u_dist, y=user_data, name="You", 
+                                 line=dict(color="#1C83E1", width=1.5)), row=row_idx, col=1)
 
+    # 1. Speed
+    add_dual_trace(user_df["speed"], ref_df["speed"], 1)
+    
+    # 2. Delta (Only one line needed, usually user vs ref)
+    fig.add_trace(go.Scatter(x=u_dist, y=user_df["delta"], fill='tozeroy', 
+                             line=dict(color="white", width=1), name="Delta"), row=2, col=1)
+    
+    # 3. Throttle
+    add_dual_trace(user_df["throttle"], ref_df["throttle"], 3)
+    
+    # 4. Brake
+    add_dual_trace(user_df["brake"], ref_df["brake"], 4)
+    
+    # 5. G-Sum
+    add_dual_trace(user_df["g_sum"], ref_df["g_sum"], 5)
+    
+    fig.update_layout(height=1200, template="plotly_dark", showlegend=False)
+    # Remove redundant labels to keep it clean
+    fig.update_xaxes(title_text="Distance (m)", row=5, col=1)
+    
+    return fig
 def create_track_map(df):
     # Using Scattergl with markers to allow color arrays (Speed Heatmap)
     fig = go.Figure(go.Scattergl(
