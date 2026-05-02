@@ -26,21 +26,27 @@ if u_file and r_file:
         with col_graphs:
             fig_tele = create_main_telemetry(u_df, r_df)
             
-            # Vi konfigurerer on_select til specifikt at lytte efter punkter
+            # Brug st.plotly_chart med eksplicit selection_mode
             event_data = st.plotly_chart(
                 fig_tele, 
                 use_container_width=True, 
-                on_select="rerun", # Tvinger appen til at opdatere når du interagerer
-                selection_mode="points", # Fokusér på enkelte datapunkter
+                on_select="rerun", 
+                selection_mode=["points"], # Vi vil kun have fat i punkter
                 key="tele_main"
             )
             
-            # Tjek om vi har fat i et punkt
+            # Debugging: Hvis du vil se om den overhovedet fanger noget, 
+            # kan du midlertidigt fjerne '#' fra linjen herunder:
+            # st.write(event_data) 
+
             if event_data and "selection" in event_data:
                 points = event_data["selection"].get("points", [])
                 if points:
-                    # Opdater distancen baseret på det valgte punkt på x-aksen
-                    st.session_state.hover_dist = points[0]["x"]
+                    # Vi tager x-værdien fra det første punkt i listen
+                    st.session_state.hover_dist = points[0].get("x", 0)
+                    # Tving en opdatering af siden så kortet følger med
+                    st.rerun()
+                    
         with col_map:
             st.write("### Track Position")
             fig_map = create_track_map(u_df, r_df, st.session_state.hover_dist)
