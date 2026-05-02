@@ -46,14 +46,12 @@ def create_friction_circle(user_df, ref_df):
     return fig
 
 def create_track_map(user_df, ref_df):
+    # If GPS data is just zeros, return an empty figure with a message
+    if user_df["lat"].sum() == 0 or ref_df["lat"].sum() == 0:
+        fig = go.Figure()
+        fig.update_layout(title="GPS Data Missing in CSV", template="plotly_dark")
+        return fig
+
     fig = go.Figure()
-    # Reference Line (Red - Dotted)
-    fig.add_trace(go.Scatter(x=ref_df["lon"], y=ref_df["lat"], mode='lines', name='Ref Line',
-                             line=dict(color='#FF4B4B', width=2, dash='dot')))
-    # User Line (Blue - Solid)
-    fig.add_trace(go.Scatter(x=user_df["lon"], y=user_df["lat"], mode='lines', name='Your Line',
-                             line=dict(color='#1C83E1', width=3)))
-    
-    fig.update_layout(title="Line Comparison (Blue = You, Red = Ref)", template="plotly_dark",
-                      xaxis=dict(visible=False), yaxis=dict(visible=False, scaleanchor="x"))
+    # ... (rest of your existing code for lines)
     return fig
