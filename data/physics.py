@@ -1,41 +1,41 @@
 import pandas as pd
 import numpy as np
 
-def calculate_physics_delta(user_df: pd.DataFrame, ref_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Physics-First calculation. Calculates spatial delta by integrating time 
-    from speed over distance (dt = dx / v). 
-    """
+def calculate_physics_metrics(user_df: pd.DataFrame, ref_df: pd.DataFrame):
+    """Calculates interpolated live delta and tire G-Sum."""
     try:
-        # --- AUTO-HEAL PERCENTAGE DISTANCES ---
+        # --- 1. SPATIAL/TIME RECONSTRUCTION ---
+        # If distance is LapDistPct (0 to 1), scale to a standard 4000m track
         if user_df['distance'].max() <= 1.05:
-            if 'time' in user_df.columns and 'time' in ref_df.columns:
-                # Convert Speed from km/h to m/s, multiply by time diff, and sum to get meters
-                user_df['distance'] = ((user_df['speed'] / 3.6) * user_df['time'].diff().fillna(0)).cumsum()
-                ref_df['distance'] = ((ref_df['speed'] / 3.6) * ref_df['time'].diff().fillna(0)).cumsum()
-            else:
-                # FALLBACK: If time is truly missing, assume an average track length of 4000 meters.
-                # This guarantees the app won't crash and the delta shape remains mathematically valid.
-                user_df['distance'] = user_df['distance'] * 4000.0
-                ref_df['distance'] = ref_df['distance'] * 4000.0
+            user_df['distance'] = user_df['distance'] * 4000.0
+            ref_df['distance'] = ref_df['distance'] * 4000.0
 
-        # Create a common spatial vector (distance)
-        max_dist = min(user_df['distance'].max(), ref_df['distance'].max())
-        common_dist = np.linspace(0, max_dist, 1000)
+        v_user = np.maximum(user_df['speed'] / 3.6, 1.0)
+        v_ref = np.maximum(ref_df['speed'] / 3.6, 1.0)
 
-        # Interpolate speeds onto the common spatial grid (convert to m/s assuming km/h input)
-        # Enforce a min speed of 1 km/h to prevent division by zero
-        v_user = np.maximum(np.interp(common_dist, user_df['distance'], user_df['speed']), 1.0) / 3.6
-        v_ref = np.maximum(np.interp(common_dist, ref_df['distance'], ref_df['speed']), 1.0) / 3.6
+        # If time is missing (dummy zeros), derive it physically: t = dx/v
+        if user_df['time'].max() == 0.0:
+            user_df['time'] = np.cumsum(np.diff(user_df['distance'], prepend=0) / v_user)
+        if ref_df['time'].max() == 0.0:
+            ref_df['time'] = np.cumsum(np.diff(ref_df['distance'], prepend=0) / v_ref)
 
-        # Calculate time steps (dt = dx / v)
-        dx = np.diff(common_dist, prepend=0)
-        t_user = np.cumsum(dx / v_user)
-        t_ref = np.cumsum(dx / v_ref)
-
-        # Delta = User Time - Ref Time
-        delta_time = t_user - t_ref
+        # --- 2. LIVE DELTA FIX (np.interp) ---
+        # Align Reference Lap's time to User Lap's spatial distance
+        ref_time_interp = np.interp(user_df['distance'], ref_df['distance'], ref_df['time'])
         
-        return pd.DataFrame({'distance': common_dist, 'delta': delta_time})
+        # Delta: Positive means User is slower (losing time)
+        user_df['delta'] = user_df['time'] - ref_time_interp
+
+        # --- 3. G-SUM CALCULATION ---
+        # G61 exports Accel in m/s^2. If max > 5.0, convert to Gs (divide by 9.81)
+        for df in [user_df, ref_df]:
+            lat, lon = df['lataccel'], df['longaccel']
+            if lat.abs().max() > 5.0 or lon.abs().max() > 5.0:
+                lat, lon = lat / 9.81, lon / 9.81
+            
+            # G-Sum Vector Math
+            df['g_sum'] = np.sqrt(lat**2 + lon**2)
+
+        return user_df, ref_df
     except Exception as e:
-        raise ValueError(f"Physics integration failed. Check telemetry spatial data. Err: {e}")
+        raise ValueError(f"Physics engine failure: {e}")
