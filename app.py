@@ -5,7 +5,7 @@ from data.ingestion import load_and_process_data
 from data.physics import calculate_physics_metrics
 from components.charts import create_main_telemetry, create_track_map
 
-# Konfiguration af siden
+# --- KONFIGURATION ---
 st.set_page_config(page_title="RaceEngineer AI", layout="wide", page_icon="🏎️")
 
 # --- API SETUP (STREAMLIT SECRETS) ---
@@ -25,117 +25,62 @@ u_file = st.sidebar.file_uploader("Upload din omgang (CSV)", type="csv")
 r_file = st.sidebar.file_uploader("Upload reference (CSV)", type="csv")
 
 st.sidebar.divider()
-st.sidebar.subheader("🤖 AI Coach Status")
+st.sidebar.subheader("🤖 AI Status")
 if AI_API_KEY:
-    st.sidebar.success("Gemini API Key indlæst fra Secrets")
+    st.sidebar.success("Gemini API Key aktiv")
 else:
-    st.sidebar.error("Mangler GEMINI_API_KEY i Secrets")
+    st.sidebar.error("Mangler API nøgle i Secrets")
 
-# --- AI COACH LOGIK ---
+# --- AI LOGIK FUNKTIONER ---
 def get_ai_coaching(user_df, ref_df):
+    """Analyserer kørselsteknik baseret på telemetri-data."""
     model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
-    
-    # Vi reducerer data-mængden (downsampling) for at holde os inden for AI grænser
-    # Vi inkluderer GEAR nu
+    # Downsampling for at overholde token-limits
     summary = user_df[['distance', 'speed', 'gear', 'throttle', 'brake', 'delta']].iloc[::30].to_csv()
     
     prompt = f"""
-    Du er en professionel Race Engineer. Analyser denne iRacing telemetri.
-    Sammenlign køreren (Dig) med referencen.
-    
-    Fokusér på:
-    1. Tidstab: Hvor tabes der mest tid?
-    2. Gear: Er der steder hvor gearvalget adskiller sig markant?
-    3. Teknik: Bremsespots og throttle-pedal kontrol.
-    
-    Hold svaret kort, konstruktivt og på dansk.
-    
-    Data:
+    Du er en professionel Race Engineer. Analyser denne telemetri:
     {summary}
+    Sammenlign brugeren med referencen. Svar kort og præcist på dansk om:
+    1. Hvor tabes der tid?
+    2. Er gearvalget optimalt?
+    3. Specifikke råd til bremsning og throttle.
     """
     response = model.generate_content(prompt)
     return response.text
 
-# --- HOVED INDHOLD ---
+def get_setup_advice(complaint, setup_html):
+    """Analyserer bilens setup (f.eks. nurburgring_combined.htm) og giver fix."""
+    model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
+    prompt = f"""
+    Du er en Setup Specialist. Brugeren kører Porsche 992 GT3 R.
+    Problem: {complaint}
+    Setup Data (HTML): {setup_html}
+    
+    Giv 3 konkrete ændringer til setuppet (f.eks. ARB, fjedre eller vinge) for at løse problemet. 
+    Forklar hvorfor baseret på værdierne i HTML-filen. Svar på dansk.
+    """
+    response = model.generate_content(prompt)
+    return response.text
+
+# --- HOVED LOGIK ---
 if u_file and r_file:
-    # Data Processing
+    # 1. Data Processing
     u_df, r_df = load_and_process_data(u_file, r_file)
     u_df, r_df = calculate_physics_metrics(u_df, r_df)
 
-    # Tabs
-   t1, t2, t3, t4, t5 = st.tabs(["📊 Dashboard", "🗺️ Full Map", "🏎️ Tires", "🧠 AI Coach", "🔧 Garage"])
+    # 2. Opret Tabs
+    t1, t2, t3, t4, t5 = st.tabs(["📊 Dashboard", "🗺️ Full Map", "🏎️ Tires", "🧠 AI Coach", "🔧 Garage"])
+
+    # --- TAB 1: DASHBOARD ---
     with t1:
         col_graphs, col_map = st.columns([3, 1])
 
-        with t5:
-    st.header("🔧 Garage & Setup Engineer")
-    st.info("Eksportér dit setup fra iRacing som HTML og indsæt koden herunder for en komplet analyse.")
-    
-    col_setup1, col_setup2 = st.columns(2)
-    
-    with col_setup1:
-        complaint = st.selectbox(
-            "Hvad er bilens største problem?",
-            [
-                "Bilen understyrer i midten af svinget (Mid-corner understeer)",
-                "Bilen er løs ved sving-exit (Snap oversteer)",
-                "Bilen er ustabil under bremsning (Entry instability)",
-                "Bilen føles for stiv/hopper over curbs",
-                "Andet (beskriv herunder)"
-            ]
-        )
-        custom_complaint = st.text_input("Uddyb evt. problemet her:")
-    
-    with col_setup2:
-        # Her indsætter du HTML-koden fra iRacing
-        setup_data = st.text_area("Indsæt Setup HTML her:", height=200, placeholder="<html>...")
-    
-    if st.button("Få Setup Fix"):
-        if AI_API_KEY and (setup_data or complaint):
-            with st.spinner("Analyserer mekanisk balance for Porsche 992 GT3 R..."):
-                # Specifik prompt til Setup-fix
-                setup_prompt = f"""
-                Du er en iRacing Setup Engineer. Analyser dette setup for en Porsche 992 GT3 R.
-                
-                Brugerens problem: {complaint} {custom_complaint}
-                Setup HTML: {setup_data}
-                
-                Giv svaret i dette format:
-                1. **Diagnose**: Hvorfor opfører bilen sig sådan med det nuværende setup?
-                2. **Primær ændring**: Hvilken specifik indstilling skal ændres først (f.eks. 'ARB setting' eller 'Wing')?
-                3. **Sekundær ændring**: Hvad skal justeres for at bevare balancen?
-                4. **Hurtigt tip**: Et råd til kørestilen for at kompensere.
-                
-                Hold det meget konkret (f.eks. "Gå fra 7 til 6 i Front ARB"). Svar på dansk.
-                """
-                
-                model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
-                response = model.generate_content(setup_prompt)
-                st.success("Analyse færdig!")
-                st.markdown(response.text)
-    
-    if st.button("Få Setup Tips"):
-        if AI_API_KEY:
-            with st.spinner("Analyserer setup-ændringer..."):
-                # Kald til AI med fokus på mekanisk balance
-                prompt = f"Jeg kører i iRacing. Mit problem er: {complaint}. Mit setup er: {setup_data}. Hvad skal jeg ændre i setuppet (f.eks. Springs, ARB, Wing) for at fikse det?"
-                # (Genbrug din AI-logik her)
-                feedback = model.generate_content(prompt)
-                st.markdown(feedback.text)
-
         with col_graphs:
-            # Lav hovedtelemetri med Gear-graf indbygget
             fig_tele = create_main_telemetry(u_df, r_df)
+            event_data = st.plotly_chart(fig_tele, use_container_width=True, on_select="rerun", key="main_tele")
             
-            # Plotly chart med on_select synkronisering
-            event_data = st.plotly_chart(
-                fig_tele, 
-                use_container_width=True, 
-                on_select="rerun", 
-                key="main_tele"
-            )
-            
-            # Opdater global position ved klik/valg
+            # Synkronisering ved klik på graf
             if event_data and "selection" in event_data and event_data["selection"]["points"]:
                 new_dist = event_data["selection"]["points"][0]["x"]
                 if new_dist != st.session_state.hover_dist:
@@ -144,37 +89,54 @@ if u_file and r_file:
 
         with col_map:
             st.subheader("Track Position")
-            # Tegn kortet med den opdaterede hover_dist
             fig_map = create_track_map(u_df, r_df, st.session_state.hover_dist)
-            st.plotly_chart(fig_map, use_container_width=True, key="track_map")
+            st.plotly_chart(fig_map, use_container_width=True, key="map")
             
-            # Live Metrics i højre side (som i image_7b7e98.png)
+            # Live Metrics
             idx = (u_df['distance'] - st.session_state.hover_dist).abs().idxmin()
             st.metric("Distance", f"{st.session_state.hover_dist:.0f} m")
             st.metric("Delta", f"{u_df.loc[idx, 'delta']:.3f} s")
             st.metric("Gear", f"{int(u_df.loc[idx, 'gear'])}")
 
+    # --- TAB 4: AI COACH ---
     with t4:
         st.header("🧠 AI Driver Coach")
-        if not AI_API_KEY:
-            st.warning("Indtast din API-nøgle i Streamlit Secrets for at aktivere denne fane.")
-        else:
-            if st.button("Generér AI Analyse"):
-                with st.spinner("AI'en tygger på din telemetri..."):
-                    try:
-                        feedback = get_ai_coaching(u_df, r_df)
-                        st.markdown("### Coach Feedback")
-                        st.write(feedback)
-                    except Exception as e:
-                        st.error(f"Der skete en fejl i AI-analysen: {e}")
+        if st.button("Kør Køre-Analyse"):
+            with st.spinner("Gemini analyserer din omgang..."):
+                try:
+                    feedback = get_ai_coaching(u_df, r_df)
+                    st.markdown(feedback)
+                except Exception as e:
+                    st.error(f"Fejl: {e}")
+
+    # --- TAB 5: GARAGE ---
+    with t5:
+        st.header("🔧 Garage & Setup Engineer")
+        st.write("Få hjælp til dit bil-setup baseret på din kørsel og HTML-eksport.")
+        
+        complaint = st.selectbox(
+            "Hvad driller bilen?", 
+            ["Understyring (Mid-corner)", "Overstyring (Exit)", "Ustabil under bremsning", "For stiv over curbs"]
+        )
+        
+        setup_text = st.text_area("Indsæt Setup HTML her (f.eks. indholdet af nurburgring_combined.htm):", height=250)
+        
+        if st.button("Analyser Setup"):
+            if setup_text:
+                with st.spinner("Beregner mekanisk balance..."):
+                    advice = get_setup_advice(complaint, setup_text)
+                    st.markdown("### Setup Anbefalinger")
+                    st.write(advice)
+            else:
+                st.warning("Indsæt venligst setup-data først.")
 
 else:
-    st.title("RaceEngineer AI")
-    st.info("👋 Upload to CSV-filer i sidebaren for at starte din analyse.")
+    # Velkomstskærm hvis ingen filer er uploadet
+    st.title("RaceEngineer AI 🏎️")
+    st.info("👋 Upload dine iRacing CSV-filer i sidebaren for at starte analysen.")
     st.markdown("""
-    ### Sådan gør du:
-    1. Upload din egen hurtigste omgang.
-    2. Upload en reference-omgang (f.eks. fra en hurtigere ven eller Garage 61).
-    3. Brug Dashboardet til at se, hvor du taber tid.
-    4. Spørg AI Coachen om tips til at køre hurtigere.
+    ### Funktioner:
+    *   **Dashboard:** Sammenlign Speed, Gear og Delta synkroniseret med banekortet.
+    *   **AI Coach:** Få direkte feedback på din teknik via Gemini 3.1 Flash.
+    *   **Garage:** Indsæt din setup-fil (HTML) og få konkrete forslag til ændringer.
     """)
