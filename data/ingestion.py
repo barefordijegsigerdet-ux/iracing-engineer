@@ -26,6 +26,10 @@ def normalize_telemetry(df):
     
     df = df.rename(columns=rename_map)
 
+    # Sort by distance to prevent "wrap-around" lines in charts
+    df = df.sort_values("distance").reset_index(drop=True)
+    return df
+
     # --- MATH CONVERSIONS ---
     
     # 1. SPEED: Convert m/s to km/h (if max is low, it's m/s)
