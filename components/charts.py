@@ -25,7 +25,7 @@ def create_main_telemetry(user_df, ref_df):
     # 1. Speed
     add_dual_trace(user_df["speed"], ref_df["speed"], 1)
     
-    # 2. Delta (Only one line needed, usually user vs ref)
+    # 2. Delta
     fig.add_trace(go.Scatter(x=u_dist, y=user_df["delta"], fill='tozeroy', 
                              line=dict(color="white", width=1), name="Delta"), row=2, col=1)
     
@@ -39,16 +39,41 @@ def create_main_telemetry(user_df, ref_df):
     add_dual_trace(user_df["g_sum"], ref_df["g_sum"], 5)
     
     fig.update_layout(height=1200, template="plotly_dark", showlegend=False)
-    # Remove redundant labels to keep it clean
     fig.update_xaxes(title_text="Distance (m)", row=5, col=1)
     
     return fig
+
+def create_friction_circle(user_df, ref_df):
+    fig = go.Figure()
+    
+    # Reference Points (Red)
+    fig.add_trace(go.Scattergl(
+        x=ref_df["lataccel"], y=ref_df["longaccel"], 
+        mode='markers', name='Ref', 
+        marker=dict(color='#FF4B4B', opacity=0.3, size=3)
+    ))
+    
+    # User Points (Blue)
+    fig.add_trace(go.Scattergl(
+        x=user_df["lataccel"], y=user_df["longaccel"], 
+        mode='markers', name='You', 
+        marker=dict(color='#1C83E1', opacity=0.5, size=3)
+    ))
+    
+    fig.update_layout(
+        title="Friction Circle (G-G)", 
+        template="plotly_dark", 
+        height=450, width=450, 
+        xaxis=dict(range=[-3,3], title="Lateral G"), 
+        yaxis=dict(range=[-3,3], title="Longitudinal G")
+    )
+    return fig
+
 def create_track_map(df):
-    # Using Scattergl with markers to allow color arrays (Speed Heatmap)
     fig = go.Figure(go.Scattergl(
         x=df["lon"], 
         y=df["lat"], 
-        mode='markers', # Changed from 'lines' to 'markers' to support color arrays
+        mode='markers',
         marker=dict(
             color=df["speed"],
             colorscale='Turbo',
@@ -63,11 +88,7 @@ def create_track_map(df):
         title="GPS Track Map (Speed Heatmap)", 
         template="plotly_dark", 
         xaxis=dict(visible=False), 
-        yaxis=dict(
-            visible=False, 
-            scaleanchor="x", 
-            scaleratio=1
-        ),
+        yaxis=dict(visible=False, scaleanchor="x", scaleratio=1),
         margin=dict(l=20, r=20, t=40, b=20)
     )
     return fig
