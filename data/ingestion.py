@@ -4,31 +4,36 @@ def load_and_process_data(u_file, r_file):
     u_df = pd.read_csv(u_file)
     r_df = pd.read_csv(r_file)
 
-    # Udvidet mapping for at dække fysik-beregninger
+    # Mapping til at ensrette kolonnenavne
     column_mapping = {
-        'GearNum': 'gear',
-        'Gear': 'gear',
-        'Speed': 'speed',
+        'GearNum': 'gear', 'Gear': 'gear',
+        'Speed': 'speed', 'VelocityX': 'speed',
         'Distance': 'distance',
-        'Throttle': 'throttle',
-        'Brake': 'brake',
+        'Throttle': 'throttle', 'Brake': 'brake',
         'Delta': 'delta',
-        'Lat': 'lat',
-        'Lon': 'lon',
-        'LatAccel': 'lataccel', # Tilføjet
-        'LongAccel': 'longaccel', # Tilføjet
-        'VertAccel': 'vertaccel',
+        'LatAccel': 'lataccel', 'LongAccel': 'longaccel',
+        'Lat': 'lat', 'Lon': 'lon',
         'SteeringWheelAngle': 'steer'
     }
 
     u_df.rename(columns=column_mapping, inplace=True)
     r_df.rename(columns=column_mapping, inplace=True)
 
-    # Sikkerhedsnet: Hvis kolonnerne mangler, fyld med 0 så appen ikke crasher
-    critical_cols = ['gear', 'speed', 'distance', 'throttle', 'brake', 'delta', 'lataccel', 'longaccel']
+    # --- FIX FOR TOMME GRAFER ---
     for df in [u_df, r_df]:
+        # Sørg for at numeriske kolonner rent faktisk er tal
+        for col in ['distance', 'speed', 'gear', 'lataccel', 'longaccel']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        
+        # Hvis vigtige kolonner mangler helt, opret dem med 0
+        critical_cols = ['gear', 'speed', 'distance', 'throttle', 'brake', 'delta', 'lataccel', 'longaccel']
         for col in critical_cols:
             if col not in df.columns:
                 df[col] = 0
+
+    # Sorter efter distance for at undgå "zig-zag" grafer
+    u_df = u_df.sort_values('distance').reset_index(drop=True)
+    r_df = r_df.sort_values('distance').reset_index(drop=True)
 
     return u_df, r_df
