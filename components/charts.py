@@ -63,7 +63,7 @@ def create_friction_circle(user_df, ref_df):
     fig.update_layout(xaxis=dict(title="Lateral G", range=[-3, 3]), yaxis=dict(title="Longitudinal G", range=[-3, 3]), template="plotly_dark")
     return fig
 
-def create_track_map(user_df, ref_df):
+def create_track_map(user_df, ref_df, hover_dist=None):
     fig = go.Figure()
 
     # 1. Banen (Asfalt)
@@ -81,7 +81,7 @@ def create_track_map(user_df, ref_df):
         mode='lines',
         name='Reference',
         line=dict(color='#ff4b4b', width=2),
-        hovertemplate="Ref Line<extra></extra>"
+        hoverinfo='skip'
     ))
 
     # 3. Dig (Blå)
@@ -90,17 +90,23 @@ def create_track_map(user_df, ref_df):
         mode='lines',
         name='You',
         line=dict(color='#1f77b4', width=2),
-        hovertemplate="Your Line<extra></extra>"
-    ))
-
-    # 4. Start/Mål linje (En lille hvid markør)
-    fig.add_trace(go.Scatter(
-        x=[user_df["lon"].iloc[0]], y=[user_df["lat"].iloc[0]],
-        mode='markers',
-        name='Start/Finish',
-        marker=dict(color='white', size=10, symbol='line-ns-open'),
         hoverinfo='skip'
     ))
+
+    # 4. LIVE MARKØR (Den røde prik)
+    if hover_dist is not None:
+        # Find nærmeste punkt baseret på distancen fra grafen
+        idx = (user_df['distance'] - hover_dist).abs().idxmin()
+        car_lat = user_df.loc[idx, 'lat']
+        car_lon = user_df.loc[idx, 'lon']
+
+        fig.add_trace(go.Scatter(
+            x=[car_lon], y=[car_lat],
+            mode='markers+text',
+            marker=dict(color='white', size=12, line=dict(color='red', width=3)),
+            name='Din position',
+            showlegend=False
+        ))
 
     fig.update_layout(
         template="plotly_dark",
@@ -109,7 +115,6 @@ def create_track_map(user_df, ref_df):
         margin=dict(l=0, r=0, t=0, b=0),
         xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, scaleanchor="y"),
         yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-        hovermode='closest',
         dragmode='pan'
     )
 
