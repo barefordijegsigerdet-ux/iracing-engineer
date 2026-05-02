@@ -24,17 +24,23 @@ if u_file and r_file:
         col_graphs, col_map = st.columns([3, 1])
 
         with col_graphs:
-            # Vi genererer figuren
             fig_tele = create_main_telemetry(u_df, r_df)
             
-            # Vi bruger on_select til at fange hover/click
-            # Dette er den moderne Streamlit-måde at gøre det på
-            event_data = st.plotly_chart(fig_tele, use_container_width=True, on_select="rerun", key="tele_main")
+            # Vi konfigurerer on_select til specifikt at lytte efter punkter
+            event_data = st.plotly_chart(
+                fig_tele, 
+                use_container_width=True, 
+                on_select="rerun", # Tvinger appen til at opdatere når du interagerer
+                selection_mode="points", # Fokusér på enkelte datapunkter
+                key="tele_main"
+            )
             
-            # Opdater hover_dist hvis der vælges et punkt
-            if event_data and "selection" in event_data and event_data["selection"]["points"]:
-                st.session_state.hover_dist = event_data["selection"]["points"][0]["x"]
-
+            # Tjek om vi har fat i et punkt
+            if event_data and "selection" in event_data:
+                points = event_data["selection"].get("points", [])
+                if points:
+                    # Opdater distancen baseret på det valgte punkt på x-aksen
+                    st.session_state.hover_dist = points[0]["x"]
         with col_map:
             st.write("### Track Position")
             fig_map = create_track_map(u_df, r_df, st.session_state.hover_dist)
