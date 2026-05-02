@@ -1,72 +1,50 @@
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-def create_main_telemetry(user_df, ref_df):
-    fig = make_subplots(
-        rows=5, cols=1, 
-        shared_xaxes=True,
-        vertical_spacing=0.02,
-        subplot_titles=("Speed (km/h)", "Delta (s)", "Throttle (%)", "Brake (%)", "G-Sum (G)")
-    )
+def create_main_telemetry(user_df, r_df):
+    # Opret subplots (5 rækker: Speed, Delta, Throttle, Brake, G-Sum)
+    fig = make_subplots(rows=5, cols=1, shared_xaxes=True, vertical_spacing=0.02,
+                        row_heights=[0.3, 0.15, 0.15, 0.15, 0.25])
 
-    def add_dual_trace(column, row, name_suffix, unit, color_user="royalblue", color_ref="red"):
-        # Hovertemplate der viser værdi + enhed
-        h_template = f"%{{y:.1f}} {unit}<extra></extra>"
-        
-        # Din linje
-        fig.add_trace(go.Scatter(
-            x=user_df["distance"], y=user_df[column], 
-            name=f"You", mode='lines', 
-            hovertemplate=h_template,
-            line=dict(color=color_user, width=2)), row=row, col=1)
-        
-        # Referencelinje
-        fig.add_trace(go.Scatter(
-            x=ref_df["distance"], y=ref_df[column], 
-            name=f"Ref", mode='lines', 
-            hovertemplate=h_template,
-            line=dict(color=color_ref, width=1.5, dash='dot')), row=row, col=1)
+    # --- Speed ---
+    fig.add_trace(go.Scatter(x=r_df['distance'], y=r_df['speed'], name="Ref Speed", line=dict(color='red', dash='dash', width=1)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=user_df['distance'], y=user_df['speed'], name="You Speed", line=dict(color='royalblue', width=2)), row=1, col=1)
 
-    # Tilføj grafer med enheder
-    add_dual_trace("speed", 1, "Speed", "km/h")
-    
-    # Delta (Special case)
-    fig.add_trace(go.Scatter(
-        x=user_df["distance"], y=user_df["delta"], 
-        fill='tozeroy', name="Delta", 
-        hovertemplate="%{y:.3f} s<extra></extra>",
-        line=dict(color="grey")), row=2, col=1)
-        
-    add_dual_trace("throttle", 3, "Throttle", "%")
-    add_dual_trace("brake", 4, "Brake", "%")
-    add_dual_trace("g_sum", 5, "G-Sum", "G")
+    # --- Delta ---
+    fig.add_trace(go.Scatter(x=user_df['distance'], y=user_df['delta'], name="Delta", fill='tozeroy', line=dict(color='gray')), row=2, col=1)
 
-    # Layout indstillinger
+    # --- Throttle ---
+    fig.add_trace(go.Scatter(x=r_df['distance'], y=r_df['throttle']*100, name="Ref Throttle", line=dict(color='red', dash='dash', width=1)), row=3, col=1)
+    fig.add_trace(go.Scatter(x=user_df['distance'], y=user_df['throttle']*100, name="You Throttle", line=dict(color='royalblue', width=2)), row=3, col=1)
+
+    # --- Brake ---
+    fig.add_trace(go.Scatter(x=r_df['distance'], y=r_df['brake']*100, name="Ref Brake", line=dict(color='red', dash='dash', width=1)), row=4, col=1)
+    fig.add_trace(go.Scatter(x=user_df['distance'], y=user_df['brake']*100, name="You Brake", line=dict(color='royalblue', width=2)), row=4, col=1)
+
+    # --- G-Sum ---
+    fig.add_trace(go.Scatter(x=user_df['distance'], y=user_df['g_sum'], name="G-Sum", line=dict(color='magenta', width=1)), row=5, col=1)
+
     fig.update_layout(
-        height=1000, 
-        template="plotly_dark", 
-        hovermode="x unified", # Dette samler alle værdier i ét vindue ved musen
-        showlegend=True, # Det hjælper at se hvem der er hvem i hover
-        margin=dict(l=50, r=20, t=50, b=50)
+        template="plotly_dark",
+        height=800,
+        margin=dict(l=50, r=20, t=30, b=50),
+        hovermode='closest', # Vigtigt for at fange enkelte punkter
+        showlegend=False
     )
-
-    # Akser
-    fig.update_yaxes(range=[-5, 105], row=3, col=1)
-    fig.update_yaxes(range=[-5, 105], row=4, col=1)
-    fig.update_yaxes(range=[0, 4], row=5, col=1)
     
-    return fig
-def create_friction_circle(user_df, ref_df):
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=ref_df["lataccel"], y=ref_df["longaccel"], mode='markers', name='Ref', marker=dict(color='red', size=2, opacity=0.3)))
-    fig.add_trace(go.Scatter(x=user_df["lataccel"], y=user_df["longaccel"], mode='markers', name='You', marker=dict(color='royalblue', size=3, opacity=0.6)))
-    fig.update_layout(xaxis=dict(title="Lateral G", range=[-3, 3]), yaxis=dict(title="Longitudinal G", range=[-3, 3]), template="plotly_dark")
+    # Fjern x-akse labels fra de øverste grafer (da de deler x-akse)
+    fig.update_xaxes(showticklabels=False, row=1, col=1)
+    fig.update_xaxes(showticklabels=False, row=2, col=1)
+    fig.update_xaxes(showticklabels=False, row=3, col=1)
+    fig.update_xaxes(showticklabels=False, row=4, col=1)
+    fig.update_xaxes(title_text="Distance (m)", row=5, col=1)
+
     return fig
 
 def create_track_map(user_df, ref_df, hover_dist=None):
     fig = go.Figure()
 
-    # 1. Banen (Asfalt)
+    # 1. Asfalten (Tykkere baggrund)
     fig.add_trace(go.Scatter(
         x=ref_df["lon"], y=ref_df["lat"],
         mode='lines',
@@ -75,47 +53,45 @@ def create_track_map(user_df, ref_df, hover_dist=None):
         showlegend=False
     ))
 
-    # 2. Reference (Rød)
+    # 2. Referencelinjen
     fig.add_trace(go.Scatter(
         x=ref_df["lon"], y=ref_df["lat"],
         mode='lines',
         name='Reference',
-        line=dict(color='#ff4b4b', width=2),
+        line=dict(color='red', width=2),
         hoverinfo='skip'
     ))
 
-    # 3. Dig (Blå)
+    # 3. Din linje
     fig.add_trace(go.Scatter(
         x=user_df["lon"], y=user_df["lat"],
         mode='lines',
         name='You',
-        line=dict(color='#1f77b4', width=2),
+        line=dict(color='royalblue', width=2),
         hoverinfo='skip'
     ))
 
-    # 4. LIVE MARKØR (Den røde prik)
+    # 4. LIVE POSITION (Prikken fra Garage 61)
     if hover_dist is not None:
-        # Find nærmeste punkt baseret på distancen fra grafen
+        # Find nærmeste koordinat baseret på distancen
         idx = (user_df['distance'] - hover_dist).abs().idxmin()
-        car_lat = user_df.loc[idx, 'lat']
-        car_lon = user_df.loc[idx, 'lon']
-
         fig.add_trace(go.Scatter(
-            x=[car_lon], y=[car_lat],
-            mode='markers+text',
+            x=[user_df.loc[idx, 'lon']], 
+            y=[user_df.loc[idx, 'lat']],
+            mode='markers',
             marker=dict(color='white', size=12, line=dict(color='red', width=3)),
-            name='Din position',
+            name='Nu',
             showlegend=False
         ))
 
-   # Layout indstillinger
     fig.update_layout(
-        height=800, # Vi sætter en fast højde her også
-        template="plotly_dark", 
-        hovermode="closest", # Skift fra "x unified" til "closest"
-        showlegend=True,
-        margin=dict(l=50, r=20, t=50, b=50),
-        clickmode='event+select' # Vigtigt: Tillad både klik og valg
+        template="plotly_dark",
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        margin=dict(l=0, r=0, t=0, b=0),
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, scaleanchor="y"),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        dragmode='pan'
     )
 
     return fig
