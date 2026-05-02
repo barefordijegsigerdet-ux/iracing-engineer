@@ -112,23 +112,58 @@ if u_file and r_file:
     # --- TAB 5: GARAGE ---
     with t5:
         st.header("🔧 Garage & Setup Engineer")
-        st.write("Få hjælp til dit bil-setup baseret på din kørsel og HTML-eksport.")
+        st.write("Få hjælp til dit bil-setup. Upload din iRacing HTML-eksport eller beskriv problemet.")
         
-        complaint = st.selectbox(
-            "Hvad driller bilen?", 
-            ["Understyring (Mid-corner)", "Overstyring (Exit)", "Ustabil under bremsning", "For stiv over curbs"]
-        )
+        col_setup_input, col_setup_info = st.columns([2, 1])
         
-        setup_text = st.text_area("Indsæt Setup HTML her (f.eks. indholdet af nurburgring_combined.htm):", height=250)
-        
-        if st.button("Analyser Setup"):
-            if setup_text:
-                with st.spinner("Beregner mekanisk balance..."):
-                    advice = get_setup_advice(complaint, setup_text)
-                    st.markdown("### Setup Anbefalinger")
-                    st.write(advice)
+        with col_setup_input:
+            complaint = st.selectbox(
+                "Hvad driller bilen mest?", 
+                [
+                    "Understyring (Mid-corner/Exit)", 
+                    "Overstyring (Entry/Mid)", 
+                    "Overstyring (Power-on exit)",
+                    "Ustabil under bremsning", 
+                    "Bilen er for stiv over curbs/bumps",
+                    "Bilen 'bundkører' (bottoming out)"
+                ]
+            )
+            
+            # Dynamisk upload af setup-fil
+            setup_file = st.file_uploader("Upload setup (.htm)", type=["htm", "html"])
+            
+            # Backup: Manuel tekst-indtastning
+            setup_text_manual = st.text_area("Eller indsæt setup-tekst her:", height=150, placeholder="<html>...")
+
+        with col_setup_info:
+            st.info("""
+            **Sådan gør du:**
+            1. I iRacing Garage, klik på 'Share' eller 'Export'.
+            2. Gem filen som .htm.
+            3. Upload den her for at lade AI'en analysere dine fjedre, ARB og aero.
+            """)
+
+        if st.button("Analyser Setup & Giv Fix"):
+            setup_to_analyze = ""
+            
+            # Prioritér den uploadede fil
+            if setup_file is not None:
+                setup_to_analyze = setup_file.read().decode("utf-8")
+            elif setup_text_manual:
+                setup_to_analyze = setup_text_manual
+            
+            if setup_to_analyze:
+                with st.spinner("Læser setup-værdier og beregner løsning..."):
+                    try:
+                        # Vi sender dataen til AI'en
+                        advice = get_setup_advice(complaint, setup_to_analyze)
+                        st.markdown("---")
+                        st.markdown("### 🛠️ Ingeniørens Anbefalinger")
+                        st.write(advice)
+                    except Exception as e:
+                        st.error(f"Kunne ikke analysere setup: {e}")
             else:
-                st.warning("Indsæt venligst setup-data først.")
+                st.warning("Upload venligst en setup-fil eller indsæt tekst for at få hjælp.")
 
 else:
     # Velkomstskærm hvis ingen filer er uploadet
