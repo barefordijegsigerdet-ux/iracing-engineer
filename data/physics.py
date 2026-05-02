@@ -2,23 +2,34 @@ import numpy as np
 import pandas as pd
 
 def calculate_physics_metrics(user_df, ref_df):
-    # 1. Create a common distance baseline (0 to 100% of the lap)
+    # 1. Create a common distance baseline based on the user's lap
     common_dist = np.linspace(0, user_df['distance'].max(), len(user_df))
     
     # 2. Interpolate the Reference lap to match Your distance points
-    # This "stretches" or "shrinks" the ref lap to align perfectly with yours
+    # ADD 'lat' and 'lon' to this list!
     ref_interp = pd.DataFrame({'distance': common_dist})
-    for col in ['speed', 'throttle', 'brake', 'lataccel', 'longaccel']:
-        ref_interp[col] = np.interp(common_dist, ref_df['distance'], ref_df[col])
+    cols_to_sync = ['speed', 'throttle', 'brake', 'lataccel', 'longaccel', 'lat', 'lon']
     
-    # 3. Calculate G-Sum for both
+    for col in cols_to_sync:
+        if col in ref_df.columns:
+            ref_interp[col] = np.interp(common_dist, ref_df['distance'], ref_df[col])
+    
+    # 3. Calculate G-Sum for both (using the unit-corrected Gs)
     user_df['g_sum'] = np.sqrt(user_df['lataccel']**2 + user_df['longaccel']**2)
     ref_interp['g_sum'] = np.sqrt(ref_interp['lataccel']**2 + ref_interp['longaccel']**2)
     
-    # 4. Calculate real-time Delta (time lost/gained)
-    # Time = Distance / Speed. We calculate the cumulative difference.
-    user_time = np.cumsum(1.0 / (user_df['speed'] / 3.6)) 
-    ref_time = np.cumsum(1.0 / (ref_interp['speed'] / 3.6))
+    # 4. Calculate Time Delta
+    # We use (speed / 3.6) to convert km/h back to m/s for accurate time math
+    user_speed_ms = user_df['speed'] / 3.6
+    ref_speed_ms = ref_interp['speed'] / 3.6
+    
+    # Cumulative time = sum of (distance_step / speed)
+    # We'll use a simple diff for distance steps
+    dist_steps = np.diff(common_dist, prepend=0)
+    
+    user_time = np.cumsum(dist_steps / np.clip(user_speed_ms, 0.1, None))
+    ref_time = np.cumsum(dist_steps / np.clip(ref_speed_ms, 0.1, None))
+    
     user_df['delta'] = user_time - ref_time
 
     return user_df, ref_interp
