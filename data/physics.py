@@ -3,10 +3,22 @@ import numpy as np
 
 def calculate_physics_delta(user_df: pd.DataFrame, ref_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Physics-First calculation. If delta is missing, calculates it by integrating time 
-    from speed over distance (dt = dx / v). Interpolates to a common spatial grid.
+    Physics-First calculation. Calculates spatial delta by integrating time 
+    from speed over distance (dt = dx / v). 
     """
     try:
+        # --- NEW: AUTO-HEAL PERCENTAGE DISTANCES ---
+        # If distance maxes at ~1.0, it's LapDistPct. We must reconstruct absolute meters.
+        # Formula: dx = v * dt  -->  Distance = Cumulative Sum of (Speed_m/s * Delta_Time)
+        if user_df['distance'].max() <= 1.05:
+            if 'time' in user_df.columns:
+                # Convert Speed from km/h to m/s, multiply by time diff, and sum
+                user_df['distance'] = ((user_df['speed'] / 3.6) * user_df['time'].diff().fillna(0)).cumsum()
+                ref_df['distance'] = ((ref_df['speed'] / 3.6) * ref_df['time'].diff().fillna(0)).cumsum()
+            else:
+                raise ValueError("Telemetry distance is a percentage (0-1), but no 'Time' column was found to calculate actual track length.")
+        # -------------------------------------------
+
         # Create a common spatial vector (distance)
         max_dist = min(user_df['distance'].max(), ref_df['distance'].max())
         common_dist = np.linspace(0, max_dist, 1000)
