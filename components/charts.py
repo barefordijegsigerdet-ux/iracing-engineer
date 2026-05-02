@@ -1,39 +1,41 @@
 import pandas as pd
-import plotly.graph_objects as objects
-from plotly.subplots import make_subplots
+import numpy as np
 
-def create_telemetry_chart(user_df: pd.DataFrame, ref_df: pd.DataFrame, delta_df: pd.DataFrame):
-    """
-    Constructs the high-performance 4-pillar telemetry chart.
-    """
-    fig = make_subplots(
-        rows=4, cols=1, 
-        shared_xaxes=True, 
-        vertical_spacing=0.04,
-        subplot_titles=("Speed (vMin Analysis)", "Time Delta", "Throttle %", "Brake %"),
-        row_heights=[0.35, 0.25, 0.2, 0.2]
-    )
+def calculate_physics_metrics(user_df: pd.DataFrame, ref_df: pd.DataFrame):
+    """Calculates interpolated live delta and tire G-Sum."""
+    try:
+        # --- 1. SPATIAL/TIME RECONSTRUCTION ---
+        # If distance is LapDistPct (0 to 1), scale to a standard 4000m track
+        if user_df['distance'].max() <= 1.05:
+            user_df['distance'] = user_df['distance'] * 4000.0
+            ref_df['distance'] = ref_df['distance'] * 4000.0
 
-    # Spatial Vectors
-    dist_u, dist_r = user_df['distance'], ref_df['distance']
+        v_user = np.maximum(user_df['speed'] / 3.6, 1.0)
+        v_ref = np.maximum(ref_df['speed'] / 3.6, 1.0)
 
-    # ROW 1: SPEED
-    fig.add_trace(objects.Scatter(x=dist_r, y=ref_df['speed'], name="Ref Speed", line=dict(color='white', dash='dash')), row=1, col=1)
-    fig.add_trace(objects.Scatter(x=dist_u, y=user_df['speed'], name="User Speed", line=dict(color='#00FF00')), row=1, col=1)
+        # If time is missing (dummy zeros), derive it physically: t = dx/v
+        if user_df['time'].max() == 0.0:
+            user_df['time'] = np.cumsum(np.diff(user_df['distance'], prepend=0) / v_user)
+        if ref_df['time'].max() == 0.0:
+            ref_df['time'] = np.cumsum(np.diff(ref_df['distance'], prepend=0) / v_ref)
 
-    # ROW 2: DELTA
-    fig.add_trace(objects.Scatter(x=delta_df['distance'], y=delta_df['delta'], name="Time Delta", fill='tozeroy', line=dict(color='#ff3333')), row=2, col=1)
-    
-    # ROW 3: THROTTLE
-    fig.add_trace(objects.Scatter(x=dist_r, y=ref_df['throttle'], name="Ref Throttle", line=dict(color='white', width=1, dash='dash')), row=3, col=1)
-    fig.add_trace(objects.Scatter(x=dist_u, y=user_df['throttle'], name="User Throttle", line=dict(color='#00FF00', width=2)), row=3, col=1)
+        # --- 2. LIVE DELTA FIX (np.interp) ---
+        # Align Reference Lap's time to User Lap's spatial distance
+        ref_time_interp = np.interp(user_df['distance'], ref_df['distance'], ref_df['time'])
+        
+        # Delta: Positive means User is slower (losing time)
+        user_df['delta'] = user_df['time'] - ref_time_interp
 
-    # ROW 4: BRAKE
-    fig.add_trace(objects.Scatter(x=dist_r, y=ref_df['brake'], name="Ref Brake", line=dict(color='white', width=1, dash='dash')), row=4, col=1)
-    fig.add_trace(objects.Scatter(x=dist_u, y=user_df['brake'], name="User Brake", line=dict(color='red', width=2)), row=4, col=1)
+        # --- 3. G-SUM CALCULATION ---
+        # G61 exports Accel in m/s^2. If max > 5.0, convert to Gs (divide by 9.81)
+        for df in [user_df, ref_df]:
+            lat, lon = df['lataccel'], df['longaccel']
+            if lat.abs().max() > 5.0 or lon.abs().max() > 5.0:
+                lat, lon = lat / 9.81, lon / 9.81
+            
+            # G-Sum Vector Math
+            df['g_sum'] = np.sqrt(lat**2 + lon**2)
 
-    # Theming & Formatting
-    fig.update_layout(height=850, template="plotly_dark", showlegend=True, hovermode="x unified", margin=dict(t=40, b=40))
-    fig.update_xaxes(title_text="Track Distance (m)", row=4, col=1)
-    
-    return fig
+        return user_df, ref_df
+    except Exception as e:
+        raise ValueError(f"Physics engine failure: {e}")
