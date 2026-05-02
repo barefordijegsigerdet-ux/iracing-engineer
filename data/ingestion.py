@@ -102,7 +102,7 @@ def normalize_telemetry(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = [str(c).lower().strip() for c in df.columns]
     available   = list(df.columns)
 
-    rename_map: dict[str, str] = {}
+    rename_map: dict[str, str] = {}   # original_col → target_col
     used_cols:  set[str]       = set()
 
     for target, aliases in SCHEMA.items():
@@ -110,6 +110,9 @@ def normalize_telemetry(df: pd.DataFrame) -> pd.DataFrame:
         if matched and matched not in used_cols:
             rename_map[matched] = target
             used_cols.add(matched)
+
+    # Remember the *original* speed column name BEFORE renaming (for unit hint)
+    speed_src_col = next((k for k, v in rename_map.items() if v == "speed"), "")
 
     df = df.rename(columns=rename_map)
 
@@ -131,20 +134,47 @@ def normalize_telemetry(df: pd.DataFrame) -> pd.DataFrame:
     for col in numeric_targets:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
 
-    # ── Unit scaling ──────────────────────────────────────────────────────────
-    # Throttle / Brake: normalise 0–1 → 0–100
+    # ── Throttle / Brake: normalise 0–1 → 0–100 ──────────────────────────────
     if df["throttle"].max() <= 1.05:
         df["throttle"] = df["throttle"] * 100.0
     if df["brake"].max() <= 1.05:
         df["brake"] = df["brake"] * 100.0
 
-    # Speed: if values look like mph (max plausibly < 230 mph but > 180 km/h
-    # threshold), convert to km/h.  We use a simple heuristic: if the declared
-    # max is suspiciously low for km/h (< 80) assume it may be mph.
-    # A safer check: if any alias contained 'mph', always convert.
-    if df["speed"].max() < 80.0 and df["speed"].max() > 5.0:
-        # Likely mph – convert
+    # ── Speed → always store internally as km/h ───────────────────────────────
+    #
+    # Detection waterfall (first match wins):
+    #
+    #   1. Column name contains 'mph'         → it's mph  → × 1.60934
+    #   2. Column name contains 'm/s'         → it's m/s  → × 3.6
+    #   3. max value < 100                    → almost certainly m/s
+    #                                            (iRacing SDK exports m/s)  → × 3.6
+    #   4. 100 ≤ max < 250 AND no 'km' hint   → treat as mph → × 1.60934
+    #      Rationale: real race cars regularly exceed 200 km/h but rarely
+    #      exceed 200 mph, so a max <250 with no explicit km/h label is safer
+    #      to treat as mph.
+    #   5. max ≥ 250 OR name contains 'km'    → already km/h, leave alone.
+    #
+    # The detected unit label is stored in df.attrs for display in the UI.
+
+    max_spd       = df["speed"].max()
+    spd_name_low  = speed_src_col.lower()
+
+    if "mph" in spd_name_low:
         df["speed"] = df["speed"] * 1.60934
+        df.attrs["speed_unit"] = "mph"
+    elif "m/s" in spd_name_low or spd_name_low.endswith("ms"):
+        df["speed"] = df["speed"] * 3.6
+        df.attrs["speed_unit"] = "m/s"
+    elif max_spd < 100.0:
+        # iRacing telemetry SDK default: Speed in m/s
+        df["speed"] = df["speed"] * 3.6
+        df.attrs["speed_unit"] = "m/s"
+    elif max_spd < 250.0 and "km" not in spd_name_low:
+        # Below 250 without an explicit km/h marker → assume mph
+        df["speed"] = df["speed"] * 1.60934
+        df.attrs["speed_unit"] = "mph"
+    else:
+        df.attrs["speed_unit"] = "km/h"
 
     return df
 
@@ -157,6 +187,7 @@ def load_and_process_data(
     downsample: bool = True,
     downsample_step: int = 3,
     row_threshold: int = 5_000,
+    speed_unit_override: str = "Auto-detect",
 ) -> pd.DataFrame:
     """
     Safe CSV loader with:
@@ -164,13 +195,15 @@ def load_and_process_data(
       • Comment / metadata row stripping (lines starting with '#' or ';')
       • Configurable downsampling for Plotly performance
       • Full column normalisation via normalize_telemetry()
+      • Manual speed unit override
 
     Parameters
     ----------
-    file_bytes      : Streamlit UploadedFile or file-like object.
-    downsample      : Whether to apply stride downsampling.
-    downsample_step : Keep every Nth row when downsampling.
-    row_threshold   : Minimum row count that triggers downsampling.
+    file_bytes           : Streamlit UploadedFile or file-like object.
+    downsample           : Whether to apply stride downsampling.
+    downsample_step      : Keep every Nth row when downsampling.
+    row_threshold        : Minimum row count that triggers downsampling.
+    speed_unit_override  : One of the sidebar selectbox options.
 
     Returns
     -------
@@ -202,10 +235,31 @@ def load_and_process_data(
         if downsample and len(df) > row_threshold:
             df = df.iloc[::downsample_step].reset_index(drop=True)
 
-        return normalize_telemetry(df)
+        df = normalize_telemetry(df)
+
+        # Apply manual override AFTER auto-detection (undoes conversion then reapplies)
+        if speed_unit_override != "Auto-detect":
+            detected = df.attrs.get("speed_unit", "km/h")
+            # First undo whatever auto-detect did
+            if detected == "mph":
+                df["speed"] = df["speed"] / 1.60934
+            elif detected in ("m/s", "m/s→km/h"):
+                df["speed"] = df["speed"] / 3.6
+
+            # Now apply the override
+            if speed_unit_override == "mph → km/h":
+                df["speed"] = df["speed"] * 1.60934
+                df.attrs["speed_unit"] = "mph (manual)"
+            elif speed_unit_override == "m/s → km/h":
+                df["speed"] = df["speed"] * 3.6
+                df.attrs["speed_unit"] = "m/s (manual)"
+            else:  # km/h no conversion
+                df.attrs["speed_unit"] = "km/h (manual)"
+
+        return df
 
     except (KeyError, ValueError):
-        raise   # re-raise domain errors with their messages intact
+        raise
     except pd.errors.EmptyDataError:
         raise ValueError("The uploaded CSV is empty or corrupted.")
     except Exception as exc:
