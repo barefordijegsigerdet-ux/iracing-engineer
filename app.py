@@ -69,10 +69,50 @@ if u_file and r_file:
 
         with t5:
     st.header("🔧 Garage & Setup Engineer")
-    st.write("Indsæt dit setup (HTML tekst) eller beskriv bilens opførsel.")
+    st.info("Eksportér dit setup fra iRacing som HTML og indsæt koden herunder for en komplet analyse.")
     
-    complaint = st.text_area("Hvad driller? (f.eks. 'Bilen er løs ved exit' eller 'For meget understyring i T1')")
-    setup_data = st.text_area("Indsæt Setup HTML/Tekst her (valgfrit)")
+    col_setup1, col_setup2 = st.columns(2)
+    
+    with col_setup1:
+        complaint = st.selectbox(
+            "Hvad er bilens største problem?",
+            [
+                "Bilen understyrer i midten af svinget (Mid-corner understeer)",
+                "Bilen er løs ved sving-exit (Snap oversteer)",
+                "Bilen er ustabil under bremsning (Entry instability)",
+                "Bilen føles for stiv/hopper over curbs",
+                "Andet (beskriv herunder)"
+            ]
+        )
+        custom_complaint = st.text_input("Uddyb evt. problemet her:")
+    
+    with col_setup2:
+        # Her indsætter du HTML-koden fra iRacing
+        setup_data = st.text_area("Indsæt Setup HTML her:", height=200, placeholder="<html>...")
+    
+    if st.button("Få Setup Fix"):
+        if AI_API_KEY and (setup_data or complaint):
+            with st.spinner("Analyserer mekanisk balance for Porsche 992 GT3 R..."):
+                # Specifik prompt til Setup-fix
+                setup_prompt = f"""
+                Du er en iRacing Setup Engineer. Analyser dette setup for en Porsche 992 GT3 R.
+                
+                Brugerens problem: {complaint} {custom_complaint}
+                Setup HTML: {setup_data}
+                
+                Giv svaret i dette format:
+                1. **Diagnose**: Hvorfor opfører bilen sig sådan med det nuværende setup?
+                2. **Primær ændring**: Hvilken specifik indstilling skal ændres først (f.eks. 'ARB setting' eller 'Wing')?
+                3. **Sekundær ændring**: Hvad skal justeres for at bevare balancen?
+                4. **Hurtigt tip**: Et råd til kørestilen for at kompensere.
+                
+                Hold det meget konkret (f.eks. "Gå fra 7 til 6 i Front ARB"). Svar på dansk.
+                """
+                
+                model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
+                response = model.generate_content(setup_prompt)
+                st.success("Analyse færdig!")
+                st.markdown(response.text)
     
     if st.button("Få Setup Tips"):
         if AI_API_KEY:
