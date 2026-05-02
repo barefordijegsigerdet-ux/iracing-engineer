@@ -65,7 +65,46 @@ def create_friction_circle(user_df, ref_df):
 
 def create_track_map(user_df, ref_df):
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=ref_df["lon"], y=ref_df["lat"], name="Ref", line=dict(color="red", dash="dash")))
-    fig.add_trace(go.Scatter(x=user_df["lon"], y=user_df["lat"], name="You", line=dict(color="royalblue")))
-    fig.update_layout(template="plotly_dark", xaxis=dict(visible=False), yaxis=dict(visible=False))
+
+    # 1. "ASFALTEN" (En meget tyk baggrundslinje for at give vej-effekt)
+    fig.add_trace(go.Scatter(
+        x=ref_df["lon"], y=ref_df["lat"],
+        mode='lines',
+        name='Track',
+        line=dict(color='#2a2a2a', width=25), # Den mørkegrå asfalt
+        hoverinfo='skip'
+    ))
+
+    # 2. REFERENCELINJEN (Rød)
+    fig.add_trace(go.Scatter(
+        x=ref_df["lon"], y=ref_df["lat"],
+        mode='lines',
+        name='Reference Line',
+        line=dict(color='red', width=2)
+    ))
+
+    # 3. DIN LINJE (Blå)
+    fig.add_trace(go.Scatter(
+        x=user_df["lon"], y=user_df["lat"],
+        mode='lines',
+        name='Your Line',
+        line=dict(color='royalblue', width=2)
+    ))
+
+    # Layout optimering for Garage 61 look
+    fig.update_layout(
+        template="plotly_dark",
+        plot_bgcolor='#111111', # Mørk baggrund
+        paper_bgcolor='#111111',
+        margin=dict(l=0, r=0, t=40, b=0),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        xaxis=dict(
+            showgrid=False, zeroline=False, showticklabels=False,
+            scaleanchor="y", scaleratio=1 # Holder proportionerne korrekte
+        ),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        dragmode='pan', # Gør det nemt at flytte rundt på kortet
+        height=700
+    )
+
     return fig
