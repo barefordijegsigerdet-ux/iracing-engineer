@@ -108,14 +108,14 @@ def create_track_map(user_df, ref_df, hover_dist=None):
             showlegend=False
         ))
 
+   # Layout indstillinger
     fig.update_layout(
-        template="plotly_dark",
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        margin=dict(l=0, r=0, t=0, b=0),
-        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, scaleanchor="y"),
-        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-        dragmode='pan'
+        height=800, # Vi sætter en fast højde her også
+        template="plotly_dark", 
+        hovermode="closest", # Skift fra "x unified" til "closest"
+        showlegend=True,
+        margin=dict(l=50, r=20, t=50, b=50),
+        clickmode='event+select' # Vigtigt: Tillad både klik og valg
     )
 
     return fig
