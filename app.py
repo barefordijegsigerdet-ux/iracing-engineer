@@ -5,7 +5,7 @@ from components.charts import create_main_telemetry, create_track_map
 
 st.set_page_config(page_title="RaceEngineer AI", layout="wide")
 
-# Session state til interaktion
+# Session state til at holde styr på, hvor man kigger i telemetrien
 if "hover_dist" not in st.session_state:
     st.session_state.hover_dist = 0
 
@@ -13,11 +13,13 @@ st.sidebar.title("🏁 iRacing Engineer")
 u_file = st.sidebar.file_uploader("Upload Your Lap (CSV)", type="csv")
 r_file = st.sidebar.file_uploader("Upload Reference (CSV)", type="csv")
 
-# AI API Key input i sidebaren
+# AI Setup
 st.sidebar.divider()
-ai_key = st.sidebar.text_input("AI Coach API Key", type="password", help="Indtast din OpenAI eller Google Gemini nøgle")
+st.sidebar.subheader("🤖 AI Settings")
+ai_key = st.sidebar.text_input("AI API Key", type="password", help="Indtast din API-nøgle (f.eks. fra OpenAI eller Gemini)")
 
 if u_file and r_file:
+    # Processing
     u_df, r_df = load_and_process_data(u_file, r_file)
     u_df, r_df = calculate_physics_metrics(u_df, r_df)
 
@@ -29,7 +31,7 @@ if u_file and r_file:
         with col_graphs:
             fig_tele = create_main_telemetry(u_df, r_df)
             
-            # Bruger indbygget Streamlit interaktion (stabil)
+            # Bruger indbygget interaktion. Klik på grafen for at flytte prikken på kortet.
             event_data = st.plotly_chart(
                 fig_tele, 
                 use_container_width=True, 
@@ -37,7 +39,7 @@ if u_file and r_file:
                 key="tele_dashboard"
             )
             
-            # Opdater position ved klik/valg
+            # Hvis brugeren vælger et punkt
             if event_data and "selection" in event_data and event_data["selection"]["points"]:
                 st.session_state.hover_dist = event_data["selection"]["points"][0]["x"]
 
@@ -45,15 +47,21 @@ if u_file and r_file:
             st.write("### Track Position")
             st.plotly_chart(create_track_map(u_df, r_df, st.session_state.hover_dist), use_container_width=True)
             
-            # Live stats
+            # Live Metrics baseret på markøren
             idx = (u_df['distance'] - st.session_state.hover_dist).abs().idxmin()
             st.metric("Distance", f"{st.session_state.hover_dist:.0f} m")
             st.metric("Delta", f"{u_df.loc[idx, 'delta']:.3f} s")
 
     with t4:
-        st.header("🧠 AI Driver Coach")
+        st.header("🧠 AI Driver Coach Analysis")
         if not ai_key:
-            st.warning("Indtast venligst en API-nøgle i sidebaren for at få AI-analyse.")
+            st.warning("Indtast venligst din API-nøgle i sidebaren for at aktivere AI-coachen.")
         else:
-            st.info("AI'en er klar til at analysere din omgang...")
-            # Her indsætter vi din AI-logik senere
+            if st.button("Generér AI Analyse"):
+                with st.spinner("AI'en kigger på dine data..."):
+                    # Her kalder vi din AI-funktion senere
+                    st.write("### Coach Feedback")
+                    st.write("AI-coachen er klar! (Her vil den analysere bremsespots, apex-fart osv. baseret på dine data).")
+
+else:
+    st.info("Upload dine CSV-filer i sidebaren for at analysere din omgang.")
