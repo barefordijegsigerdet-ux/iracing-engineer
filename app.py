@@ -21,23 +21,25 @@ def get_ai_coaching(api_key, user_df, ref_df):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
     
-    # Vi laver et sammendrag af dataene så AI'en ikke bliver forvirret af 10.000 rækker
-    # Vi tager f.eks. hver 20. række for at fange de vigtigste tendenser
-    summary_data = user_df[['distance', 'speed', 'throttle', 'brake', 'delta']].iloc[::20].to_csv()
+    # Vi inkluderer nu 'gear' i sammendraget
+    summary_data = user_df[['distance', 'speed', 'gear', 'throttle', 'brake', 'delta']].iloc[::25].to_csv()
     
     prompt = f"""
-    Du er en professionel sim-racing driver coach. Analyser denne telemetri data.
-    Sammenlign 'You' med 'Reference'. 
-    Find de 3 steder hvor køreren taber mest tid (se på delta).
-    Giv specifik feedback på bremsespots og throttle application.
-    Hold svaret kort, skarpt og på dansk.
+    Du er en Race Engineer AI. Analyser denne telemetri.
+    Sammenlign brugerens kørsel med referencen.
+    
+    Fokusér specifikt på:
+    1. Tidstab (Delta).
+    2. Gearvalg: Bruger køreren et forkert gear i svingene (f.eks. 2. gear hvor ref bruger 3.)?
+    3. Short-shifting: Skifter køreren gear for tidligt eller for sent?
+    
+    Giv konkrete tips til at vinde tid. Svar på dansk.
     
     Data:
     {summary_data}
     """
     response = model.generate_content(prompt)
     return response.text
-
 if u_file and r_file:
     u_df, r_df = load_and_process_data(u_file, r_file)
     u_df, r_df = calculate_physics_metrics(u_df, r_df)
