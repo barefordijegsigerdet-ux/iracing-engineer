@@ -66,45 +66,51 @@ def create_friction_circle(user_df, ref_df):
 def create_track_map(user_df, ref_df):
     fig = go.Figure()
 
-    # 1. "ASFALTEN" (En meget tyk baggrundslinje for at give vej-effekt)
+    # 1. Banen (Asfalt)
     fig.add_trace(go.Scatter(
         x=ref_df["lon"], y=ref_df["lat"],
         mode='lines',
-        name='Track',
-        line=dict(color='#2a2a2a', width=25), # Den mørkegrå asfalt
-        hoverinfo='skip'
+        line=dict(color='#2a2a2a', width=20),
+        hoverinfo='skip',
+        showlegend=False
     ))
 
-    # 2. REFERENCELINJEN (Rød)
+    # 2. Reference (Rød)
     fig.add_trace(go.Scatter(
         x=ref_df["lon"], y=ref_df["lat"],
         mode='lines',
-        name='Reference Line',
-        line=dict(color='red', width=2)
+        name='Reference',
+        line=dict(color='#ff4b4b', width=2),
+        hovertemplate="Ref Line<extra></extra>"
     ))
 
-    # 3. DIN LINJE (Blå)
+    # 3. Dig (Blå)
     fig.add_trace(go.Scatter(
         x=user_df["lon"], y=user_df["lat"],
         mode='lines',
-        name='Your Line',
-        line=dict(color='royalblue', width=2)
+        name='You',
+        line=dict(color='#1f77b4', width=2),
+        hovertemplate="Your Line<extra></extra>"
     ))
 
-    # Layout optimering for Garage 61 look
+    # 4. Start/Mål linje (En lille hvid markør)
+    fig.add_trace(go.Scatter(
+        x=[user_df["lon"].iloc[0]], y=[user_df["lat"].iloc[0]],
+        mode='markers',
+        name='Start/Finish',
+        marker=dict(color='white', size=10, symbol='line-ns-open'),
+        hoverinfo='skip'
+    ))
+
     fig.update_layout(
         template="plotly_dark",
-        plot_bgcolor='#111111', # Mørk baggrund
-        paper_bgcolor='#111111',
-        margin=dict(l=0, r=0, t=40, b=0),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        xaxis=dict(
-            showgrid=False, zeroline=False, showticklabels=False,
-            scaleanchor="y", scaleratio=1 # Holder proportionerne korrekte
-        ),
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        margin=dict(l=0, r=0, t=0, b=0),
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, scaleanchor="y"),
         yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-        dragmode='pan', # Gør det nemt at flytte rundt på kortet
-        height=700
+        hovermode='closest',
+        dragmode='pan'
     )
 
     return fig
