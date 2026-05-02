@@ -63,10 +63,25 @@ if u_file and r_file:
     u_df, r_df = calculate_physics_metrics(u_df, r_df)
 
     # Tabs
-    t1, t2, t3, t4 = st.tabs(["📊 Dashboard", "🗺️ Full Map", "🏎️ Tires", "🧠 AI Coach"])
-
+   t1, t2, t3, t4, t5 = st.tabs(["📊 Dashboard", "🗺️ Full Map", "🏎️ Tires", "🧠 AI Coach", "🔧 Garage"])
     with t1:
         col_graphs, col_map = st.columns([3, 1])
+
+        with t5:
+    st.header("🔧 Garage & Setup Engineer")
+    st.write("Indsæt dit setup (HTML tekst) eller beskriv bilens opførsel.")
+    
+    complaint = st.text_area("Hvad driller? (f.eks. 'Bilen er løs ved exit' eller 'For meget understyring i T1')")
+    setup_data = st.text_area("Indsæt Setup HTML/Tekst her (valgfrit)")
+    
+    if st.button("Få Setup Tips"):
+        if AI_API_KEY:
+            with st.spinner("Analyserer setup-ændringer..."):
+                # Kald til AI med fokus på mekanisk balance
+                prompt = f"Jeg kører i iRacing. Mit problem er: {complaint}. Mit setup er: {setup_data}. Hvad skal jeg ændre i setuppet (f.eks. Springs, ARB, Wing) for at fikse det?"
+                # (Genbrug din AI-logik her)
+                feedback = model.generate_content(prompt)
+                st.markdown(feedback.text)
 
         with col_graphs:
             # Lav hovedtelemetri med Gear-graf indbygget
