@@ -1,11 +1,11 @@
 import streamlit as st
+import google.generativeai as genai
 from data.ingestion import load_and_process_data
 from data.physics import calculate_physics_metrics
 from components.charts import create_main_telemetry, create_track_map
 
 st.set_page_config(page_title="RaceEngineer AI", layout="wide")
 
-# Initialiser session state til synkronisering
 if "hover_dist" not in st.session_state:
     st.session_state.hover_dist = 0
 
@@ -14,9 +14,29 @@ u_file = st.sidebar.file_uploader("Upload Your Lap (CSV)", type="csv")
 r_file = st.sidebar.file_uploader("Upload Reference (CSV)", type="csv")
 
 st.sidebar.divider()
-st.sidebar.subheader("🤖 AI Driver Coach")
-# Anbefalet: Brug Gemini 3.1 Flash Lite for flest gratis uses
-ai_key = st.sidebar.text_input("Gemini API Key", type="password", help="Hent din nøgle hos Google AI Studio")
+st.sidebar.subheader("🤖 AI Settings")
+ai_key = st.sidebar.text_input("Gemini API Key", type="password")
+
+def get_ai_coaching(api_key, user_df, ref_df):
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
+    
+    # Vi laver et sammendrag af dataene så AI'en ikke bliver forvirret af 10.000 rækker
+    # Vi tager f.eks. hver 20. række for at fange de vigtigste tendenser
+    summary_data = user_df[['distance', 'speed', 'throttle', 'brake', 'delta']].iloc[::20].to_csv()
+    
+    prompt = f"""
+    Du er en professionel sim-racing driver coach. Analyser denne telemetri data.
+    Sammenlign 'You' med 'Reference'. 
+    Find de 3 steder hvor køreren taber mest tid (se på delta).
+    Giv specifik feedback på bremsespots og throttle application.
+    Hold svaret kort, skarpt og på dansk.
+    
+    Data:
+    {summary_data}
+    """
+    response = model.generate_content(prompt)
+    return response.text
 
 if u_file and r_file:
     u_df, r_df = load_and_process_data(u_file, r_file)
@@ -26,45 +46,28 @@ if u_file and r_file:
 
     with t1:
         col_graphs, col_map = st.columns([3, 1])
-
         with col_graphs:
             fig_tele = create_main_telemetry(u_df, r_df)
-            
-            # Vi bruger on_select="rerun" for at fange interaktion
-            event_data = st.plotly_chart(
-                fig_tele, 
-                use_container_width=True, 
-                on_select="rerun", 
-                key="tele_sync_main"
-            )
-            
-            # Tving synkronisering mellem graf og kort
-            if event_data and "selection" in event_data and event_data["selection"]["points"]:
-                new_dist = event_data["selection"]["points"][0]["x"]
-                if new_dist != st.session_state.hover_dist:
-                    st.session_state.hover_dist = new_dist
-                    st.rerun() 
+            event = st.plotly_chart(fig_tele, use_container_width=True, on_select="rerun", key="tele")
+            if event and "selection" in event and event["selection"]["points"]:
+                st.session_state.hover_dist = event["selection"]["points"][0]["x"]
+                st.rerun()
 
         with col_map:
-            st.write("### Track Position")
-            # Kortet opdateres nu øjeblikkeligt pga. st.rerun()
-            fig_map = create_track_map(u_df, r_df, st.session_state.hover_dist)
-            st.plotly_chart(fig_map, use_container_width=True, key="map_sync_side")
-            
-            # Metrics
+            st.plotly_chart(create_track_map(u_df, r_df, st.session_state.hover_dist), use_container_width=True)
             idx = (u_df['distance'] - st.session_state.hover_dist).abs().idxmin()
             st.metric("Distance", f"{st.session_state.hover_dist:.0f} m")
             st.metric("Delta", f"{u_df.loc[idx, 'delta']:.3f} s")
 
     with t4:
-        st.header("🧠 AI Driver Coach (Gemini 3.1 Flash Lite)")
+        st.header("🧠 AI Driver Coach")
         if not ai_key:
-            st.warning("Indtast venligst din Gemini API-nøgle i sidebaren for at få adgang.")
+            st.warning("Indtast venligst din Gemini API-nøgle i sidebaren.")
         else:
-            if st.button("Analysér min kørsel"):
-                with st.spinner("AI'en beregner dine fejl..."):
-                    # Placeholder for AI kald
-                    st.success("AI Coach er klar. Skal vi sende data nu?")
-
-else:
-    st.info("Upload dine CSV-filer for at starte.")
+            if st.button("Generér Analyse"):
+                with st.spinner("Gemini analyserer din omgang..."):
+                    try:
+                        feedback = get_ai_coaching(ai_key, u_df, r_df)
+                        st.markdown(feedback)
+                    except Exception as e:
+                        st.error(f"Fejl i AI-opkald: {e}")
