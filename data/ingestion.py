@@ -14,7 +14,7 @@ SCHEMA = {
 }
 
 def normalize_telemetry(df):
-    # Standardize column names
+    # Standardiser kolonnenavne
     df.columns = [str(c).lower().strip().replace("_", "") for c in df.columns]
     rename_map = {}
 
@@ -26,27 +26,27 @@ def normalize_telemetry(df):
     
     df = df.rename(columns=rename_map)
 
-    # --- MATH CONVERSIONS ---
+    # --- TVUNGET KONVERTERING (Ingen tjek, bare gør det) ---
     
-    # 1. SPEED: Convert m/s to km/h
-    if df["speed"].max() < 100:
-        df["speed"] = df["speed"] * 3.6
+    # 1. SPEED: Vi ved Garage 61 bruger m/s. Gør det altid til km/t.
+    df["speed"] = df["speed"] * 3.6
 
-    # 2. ACCEL: Convert m/s² to Gs
+    # 2. ACCEL: Gør det altid til G-kræfter (divider med tyngdekraften)
+    # Hvis dine data allerede er i G, vil dette gøre dem meget små, 
+    # men i dit tilfælde ser det ud til de mangler divisionen.
     if df["lataccel"].abs().max() > 5:
         df["lataccel"] = df["lataccel"] / 9.80665
         df["longaccel"] = df["longaccel"] / 9.80665
 
-    # 3. PEDALS: Convert 0.0-1.0 to 0-100%
-    if df["throttle"].max() <= 1.1:
-        df["throttle"] = (df["throttle"] * 100).round(1)
-    if df["brake"].max() <= 1.1:
-        df["brake"] = (df["brake"] * 100).round(1)
+    # 3. PEDALER: Tving dem til 0-100 skalaen
+    # Vi bruger .clip for at sikre, at vi ikke får mærkelige værdier over 100
+    df["throttle"] = (df["throttle"] * 100).clip(0, 100)
+    df["brake"] = (df["brake"] * 100).clip(0, 100)
 
-    # 4. SORTING: Prevent "ghost lines" by ordering by distance
+    # 4. SORTERING: Vigtigt for at undgå de vandrette streger
     df = df.sort_values("distance").reset_index(drop=True)
 
-    # Fill missing columns with zeros
+    # Fyld manglende kolonner
     required = ["distance", "speed", "throttle", "brake", "lataccel", "longaccel", "lat", "lon"]
     for col in required:
         if col not in df.columns:
