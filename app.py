@@ -5,7 +5,7 @@ from components.charts import create_main_telemetry, create_track_map
 
 st.set_page_config(page_title="RaceEngineer AI", layout="wide")
 
-# Session state til at holde styr på, hvor man kigger i telemetrien
+# Initialiser session state til synkronisering
 if "hover_dist" not in st.session_state:
     st.session_state.hover_dist = 0
 
@@ -13,13 +13,12 @@ st.sidebar.title("🏁 iRacing Engineer")
 u_file = st.sidebar.file_uploader("Upload Your Lap (CSV)", type="csv")
 r_file = st.sidebar.file_uploader("Upload Reference (CSV)", type="csv")
 
-# AI Setup
 st.sidebar.divider()
-st.sidebar.subheader("🤖 AI Settings")
-ai_key = st.sidebar.text_input("AI API Key", type="password", help="Indtast din API-nøgle (f.eks. fra OpenAI eller Gemini)")
+st.sidebar.subheader("🤖 AI Driver Coach")
+# Anbefalet: Brug Gemini 3.1 Flash Lite for flest gratis uses
+ai_key = st.sidebar.text_input("Gemini API Key", type="password", help="Hent din nøgle hos Google AI Studio")
 
 if u_file and r_file:
-    # Processing
     u_df, r_df = load_and_process_data(u_file, r_file)
     u_df, r_df = calculate_physics_metrics(u_df, r_df)
 
@@ -31,37 +30,41 @@ if u_file and r_file:
         with col_graphs:
             fig_tele = create_main_telemetry(u_df, r_df)
             
-            # Bruger indbygget interaktion. Klik på grafen for at flytte prikken på kortet.
+            # Vi bruger on_select="rerun" for at fange interaktion
             event_data = st.plotly_chart(
                 fig_tele, 
                 use_container_width=True, 
                 on_select="rerun", 
-                key="tele_dashboard"
+                key="tele_sync_main"
             )
             
-            # Hvis brugeren vælger et punkt
+            # Tving synkronisering mellem graf og kort
             if event_data and "selection" in event_data and event_data["selection"]["points"]:
-                st.session_state.hover_dist = event_data["selection"]["points"][0]["x"]
+                new_dist = event_data["selection"]["points"][0]["x"]
+                if new_dist != st.session_state.hover_dist:
+                    st.session_state.hover_dist = new_dist
+                    st.rerun() 
 
         with col_map:
             st.write("### Track Position")
-            st.plotly_chart(create_track_map(u_df, r_df, st.session_state.hover_dist), use_container_width=True)
+            # Kortet opdateres nu øjeblikkeligt pga. st.rerun()
+            fig_map = create_track_map(u_df, r_df, st.session_state.hover_dist)
+            st.plotly_chart(fig_map, use_container_width=True, key="map_sync_side")
             
-            # Live Metrics baseret på markøren
+            # Metrics
             idx = (u_df['distance'] - st.session_state.hover_dist).abs().idxmin()
             st.metric("Distance", f"{st.session_state.hover_dist:.0f} m")
             st.metric("Delta", f"{u_df.loc[idx, 'delta']:.3f} s")
 
     with t4:
-        st.header("🧠 AI Driver Coach Analysis")
+        st.header("🧠 AI Driver Coach (Gemini 3.1 Flash Lite)")
         if not ai_key:
-            st.warning("Indtast venligst din API-nøgle i sidebaren for at aktivere AI-coachen.")
+            st.warning("Indtast venligst din Gemini API-nøgle i sidebaren for at få adgang.")
         else:
-            if st.button("Generér AI Analyse"):
-                with st.spinner("AI'en kigger på dine data..."):
-                    # Her kalder vi din AI-funktion senere
-                    st.write("### Coach Feedback")
-                    st.write("AI-coachen er klar! (Her vil den analysere bremsespots, apex-fart osv. baseret på dine data).")
+            if st.button("Analysér min kørsel"):
+                with st.spinner("AI'en beregner dine fejl..."):
+                    # Placeholder for AI kald
+                    st.success("AI Coach er klar. Skal vi sende data nu?")
 
 else:
-    st.info("Upload dine CSV-filer i sidebaren for at analysere din omgang.")
+    st.info("Upload dine CSV-filer for at starte.")
