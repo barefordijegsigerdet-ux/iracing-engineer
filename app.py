@@ -2,41 +2,45 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import requests
 import io
 import google.generativeai as genai
 
-# --- KONFIGURATION & AI SETUP ---
+# --- 1. SETUP & AI CONFIGURATION ---
 st.set_page_config(page_title="iRacing Universal Coach", layout="wide")
 
-# Vi bruger GOOGLE_API_KEY, da det er det, din test viser er "True"
+# Vi bruger SYSTEM_INSTRUCTION til at definere AI'ens personlighed
+SYSTEM_INSTRUCTION = """
+You are a professional, data-driven Race Engineer and Driver Coach. Your goal is to identify time loss and optimize driver performance across any car and track combination in iRacing.
+
+Core Directives:
+1. Data Over Emotion: Prioritize telemetry over driver 'feel'.
+2. The 'Universal Fast' Principles: Analyze Braking, Corner Geometry, Minimum Speed (vMin), and Throttle Application.
+3. Corner Phase Analysis: Break corners into Entry, Mid-Corner, and Exit.
+4. Consistency: Identify 'spiky' inputs.
+5. Benchmarking: Compare User vs. Reference input timing and intensity.
+
+Style: Concise, technical, and honest. Separate Technical Errors from Input Issues.
+"""
+
+# Initialisering af AI-model
 if "GOOGLE_API_KEY" in st.secrets:
-    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    
-    SYSTEM_INSTRUCTION = """
-    You are a professional, data-driven Race Engineer and Driver Coach. Your goal is to identify time loss and optimize driver performance across any car and track combination in iRacing.
-    
-    Core Directives:
-    1. Data Over Emotion: Prioritize telemetry over driver 'feel'.
-    2. The 'Universal Fast' Principles: Analyze Braking, Corner Geometry, Minimum Speed (vMin), and Throttle Application.
-    3. Corner Phase Analysis: Break corners into Entry, Mid-Corner, and Exit.
-    4. Consistency: Identify 'spiky' inputs.
-    5. Benchmarking: Compare User vs. Reference input timing and intensity.
-    
-    Style: Concise, technical, and honest. Separate Technical Errors from Input Issues.
-    """
-    # Vi bruger 'gemini-1.5-flash' her - den er lynhurtig og gratis
-    model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=SYSTEM_INSTRUCTION)
+    try:
+        genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+        model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=SYSTEM_INSTRUCTION)
+    except Exception as e:
+        st.error(f"Fejl ved konfiguration af AI: {e}")
+        model = None
 else:
-    st.warning("⚠️ Kunne ikke finde GOOGLE_API_KEY i dine Secrets.")
-    
-# --- GITHUB CONFIG ---
+    st.warning("⚠️ API nøgle (GOOGLE_API_KEY) ikke fundet i Secrets.")
+    model = None
+
+# --- 2. GITHUB CONFIGURATION ---
 USER = "barefordijegsigerdet-ux"
 REPO = "iracing-engineer"
 BRANCH = "main"
 
-# --- FUNKTIONER ---
+# --- 3. HELPER FUNCTIONS ---
 @st.cache_data
 def load_data(name):
     if not name: return None
@@ -56,20 +60,23 @@ def load_data(name):
     except: return None
 
 def get_ai_analysis(u_stats, r_stats, zone_name):
+    if model is None:
+        return "AI Coach er ikke tilgængelig (mangler API nøgle)."
+        
     prompt = f"""
     Analyse af {zone_name}:
     Bruger (Jonas): vMin={u_stats['vmin']} km/t, Peak Brake={u_stats['p_brake']}%, Throttle Pickup={u_stats['t_pickup']}% af zonen.
     Reference (Leeroy): vMin={r_stats['vmin']} km/t, Peak Brake={r_stats['p_brake']}%, Throttle Pickup={r_stats['t_pickup']}% af zonen.
     
-    Forklar hvorfor Jonas taber tid, og giv præcis teknisk instruks.
+    Forklar hvorfor Jonas taber tid, og giv præcis teknisk instruks baseret på dine Core Directives.
     """
     try:
         response = model.generate_content(prompt)
         return response.text
-    except:
-        return "AI Coach er i øjeblikket optaget. Tjek din API nøgle."
+    except Exception as e:
+        return f"Kunne ikke hente analyse fra Google: {str(e)}"
 
-# --- SIDEBAR ---
+# --- 4. SIDEBAR ---
 with st.sidebar:
     st.header("📂 Data Setup")
     u_file = st.text_input("Din fil (CSV):", "jonas.csv")
@@ -78,12 +85,14 @@ with st.sidebar:
     sensitivity = st.slider("Coach Følsomhed (tidstab)", 0.05, 0.50, 0.10)
     t_len = st.number_input("Banelængde (m)", value=4252)
 
-# --- ANALYSE LOGIK ---
+# --- 5. MAIN ANALYSIS LOGIC ---
 df_u = load_data(u_file)
 df_r = load_data(r_file)
 
 if df_u is not None and df_r is not None:
-    # Interpolation
+    st.title("🤖 Universal AI Coach")
+    
+    # Interpolation for præcis sammenligning
     grid = np.linspace(0, 1, 2000)
     data = pd.DataFrame({'dist_pct': grid * 100})
     
@@ -91,46 +100,41 @@ if df_u is not None and df_r is not None:
         if col in df_u.columns: data[f'u_{k}'] = np.interp(grid, df_u['lapdistpct'], df_u[col])
         if col in df_r.columns: data[f'r_{k}'] = np.interp(grid, df_r['lapdistpct'], df_r[col])
     
-    # Delta
+    # Beregning af Delta
     u_ms = np.maximum(data['u_speed']/3.6, 1.0)
     r_ms = np.maximum(data['r_speed']/3.6, 1.0)
     data['delta'] = np.cumsum(((1/2000)*t_len)/u_ms - ((1/2000)*t_len)/r_ms)
     data['delta_diff'] = data['delta'].diff().fillna(0)
 
-    # --- UI ---
-    st.title("🤖 Universal AI Coach")
-    
-    # Sektor analyse
-    zones = []
-    for i in range(0, 100, 5): # Tjekker hver 5% af banen
+    # Visning af tids-tab zoner
+    for i in range(0, 100, 5):
         mask = (data['dist_pct'] >= i) & (data['dist_pct'] < i+5)
         z = data[mask]
         loss = z['delta_diff'].sum()
         
         if loss > sensitivity:
-            # Ekstraher stats til AI
             u_stats = {'vmin': round(z['u_speed'].min()*3.6, 1), 'p_brake': int(z['u_brk'].max()*100), 't_pickup': i}
             r_stats = {'vmin': round(z['r_speed'].min()*3.6, 1), 'p_brake': int(z['r_brk'].max()*100), 't_pickup': i}
             
             with st.expander(f"🚩 Tab i Zone {i}% - {i+5}% : {loss:.3f}s"):
                 col1, col2 = st.columns([1, 2])
                 with col1:
-                    st.write(f"**Din vMin:** {u_stats['vmin']} km/t")
-                    st.write(f"**Ref vMin:** {r_stats['vmin']} km/t")
+                    st.metric("Din vMin", f"{u_stats['vmin']} km/t")
+                    st.metric("Ref vMin", f"{r_stats['vmin']} km/t", delta=round(u_stats['vmin'] - r_stats['vmin'], 1))
                 with col2:
-                    if st.button(f"Få AI Analyse af svinget", key=f"btn_{i}"):
-                        with st.spinner("Coach analyserer..."):
-                            advice = get_ai_analysis(u_stats, r_stats, f"Sektor ved {i}%")
+                    if st.button(f"Få AI Analyse", key=f"btn_{i}"):
+                        with st.spinner("Analyserer telemetry..."):
+                            advice = get_ai_analysis(u_stats, r_stats, f"Zone ved {i}%")
                             st.info(advice)
                             
-    # Track Map (Statisk Plotly)
+    # Track Map
     if 'u_tx' in data.columns:
         st.divider()
         st.subheader("📍 Bane Oversigt")
         map_fig = go.Figure()
-        map_fig.add_trace(go.Scatter(x=data['u_tx'], y=data['u_ty'], line=dict(color='gray', width=1), hoverinfo='skip'))
+        map_fig.add_trace(go.Scatter(x=data['u_tx'], y=data['u_ty'], line=dict(color='white', width=2), name="Bane"))
+        map_fig.update_layout(template="plotly_dark", height=400, xaxis=dict(visible=False), yaxis=dict(visible=False, scaleanchor="x"))
         st.plotly_chart(map_fig, use_container_width=True)
 
 else:
-    st.info("👋 Hej! Jeg er din coach. Sørg for at dine CSV-filer ligger i dit GitHub repo og at det er sat til 'Public'.")
-    st.write(f"Leder efter: `{USER}/{REPO}/main/`")
+    st.info("👋 Klar til kørsel! Sørg for at 'jonas.csv' og 'leeroy.csv' er i dit GitHub repo.")
