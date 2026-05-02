@@ -26,12 +26,15 @@ def normalize_telemetry(df):
     
     df = df.rename(columns=rename_map)
 
-    # CRITICAL: If we are using LapDistPct, we should treat it as our distance baseline
-    # Ensure it's floats
-    if "distance" in df.columns:
-        df["distance"] = df["distance"].astype(float)
+    # SCALING LOGIC: Convert 0.0-1.0 to 0-100%
+    # We check if the max is <= 1.1 to avoid double-scaling if data is already 0-100
+    if df["throttle"].max() <= 1.1:
+        df["throttle"] = df["throttle"] * 100.0
+        
+    if df["brake"].max() <= 1.1:
+        df["brake"] = df["brake"] * 100.0
 
-    # Safety fallbacks for missing columns
+    # Ensure distance and other required columns exist
     required = ["distance", "speed", "throttle", "brake", "lataccel", "longaccel", "lat", "lon"]
     for col in required:
         if col not in df.columns:
