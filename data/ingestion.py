@@ -14,7 +14,7 @@ SCHEMA = {
 }
 
 def normalize_telemetry(df):
-    # Standardize column names to lowercase/no underscores
+    # Standardize column names
     df.columns = [str(c).lower().strip().replace("_", "") for c in df.columns]
     rename_map = {}
 
@@ -26,28 +26,27 @@ def normalize_telemetry(df):
     
     df = df.rename(columns=rename_map)
 
-    # Sort by distance to prevent "wrap-around" lines in charts
-    df = df.sort_values("distance").reset_index(drop=True)
-    return df
-
     # --- MATH CONVERSIONS ---
     
-    # 1. SPEED: Convert m/s to km/h (if max is low, it's m/s)
+    # 1. SPEED: Convert m/s to km/h
     if df["speed"].max() < 100:
         df["speed"] = df["speed"] * 3.6
 
-    # 2. ACCEL: Convert m/s² to Gs (if max is high, it's m/s²)
+    # 2. ACCEL: Convert m/s² to Gs
     if df["lataccel"].abs().max() > 5:
         df["lataccel"] = df["lataccel"] / 9.80665
         df["longaccel"] = df["longaccel"] / 9.80665
 
-    # 3. PEDALS: Convert 0.0-1.0 to 0-100% and round to whole numbers
+    # 3. PEDALS: Convert 0.0-1.0 to 0-100%
     if df["throttle"].max() <= 1.1:
-        df["throttle"] = (df["throttle"] * 100).round().astype(int)
+        df["throttle"] = (df["throttle"] * 100).round(1)
     if df["brake"].max() <= 1.1:
-        df["brake"] = (df["brake"] * 100).round().astype(int)
+        df["brake"] = (df["brake"] * 100).round(1)
 
-    # Fill missing columns with zeros to prevent crashes
+    # 4. SORTING: Prevent "ghost lines" by ordering by distance
+    df = df.sort_values("distance").reset_index(drop=True)
+
+    # Fill missing columns with zeros
     required = ["distance", "speed", "throttle", "brake", "lataccel", "longaccel", "lat", "lon"]
     for col in required:
         if col not in df.columns:
@@ -56,7 +55,7 @@ def normalize_telemetry(df):
     return df
 
 def load_and_process_data(user_file, ref_file):
-    user_df = pd.read_csv(user_file, comment='#')
-    ref_df = pd.read_csv(ref_file, comment='#')
+    user_raw = pd.read_csv(user_file, comment='#')
+    ref_raw = pd.read_csv(ref_file, comment='#')
     
-    return normalize_telemetry(user_df), normalize_telemetry(ref_df)
+    return normalize_telemetry(user_raw), normalize_telemetry(ref_raw)
