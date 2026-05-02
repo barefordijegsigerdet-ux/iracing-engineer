@@ -23,17 +23,15 @@ Core Directives:
 Style: Concise, technical, and honest. Separate Technical Errors from Input Issues.
 """
 
-# Initialisering af AI-model
+# --- RETTELSE AF MODELNAVNET ---
 if "GOOGLE_API_KEY" in st.secrets:
-    try:
-        genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-        model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=SYSTEM_INSTRUCTION)
-    except Exception as e:
-        st.error(f"Fejl ved konfiguration af AI: {e}")
-        model = None
+    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+    
+    # Vi skifter til Gemini 3 Flash Preview som findes i din liste
+    # Du kan også bruge 'gemini-flash-latest' for altid at have den nyeste
+    model = genai.GenerativeModel('gemini-3-flash-preview', system_instruction=SYSTEM_INSTRUCTION)
 else:
-    st.warning("⚠️ API nøgle (GOOGLE_API_KEY) ikke fundet i Secrets.")
-    model = None
+    st.warning("⚠️ API nøgle ikke fundet.")
 
 # --- 2. GITHUB CONFIGURATION ---
 USER = "barefordijegsigerdet-ux"
