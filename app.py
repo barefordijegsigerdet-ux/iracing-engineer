@@ -69,14 +69,30 @@ with st.sidebar:
     downsample = st.checkbox("Downsample large files (>5 000 rows)", value=True)
     show_raw   = st.checkbox("Show raw DataFrame preview", value=False)
 
+    st.divider()
+    st.markdown("### 🔧 &nbsp; Speed Unit Override")
+    st.caption("Only change if the speed trace looks wrong.")
+    speed_unit_override = st.selectbox(
+        "Force speed unit",
+        options=["Auto-detect", "km/h (no conversion)", "mph → km/h", "m/s → km/h"],
+        index=0,
+    )
+
 
 # ── Main Pipeline ─────────────────────────────────────────────────────────────
 if user_file and ref_file:
     try:
         # 1 ── Ingest & normalise
         with st.spinner("Parsing & normalising CSVs …"):
-            user_df = load_and_process_data(user_file, downsample=downsample)
-            ref_df  = load_and_process_data(ref_file,  downsample=downsample)
+            user_df = load_and_process_data(user_file, downsample=downsample,
+                                            speed_unit_override=speed_unit_override)
+            ref_df  = load_and_process_data(ref_file,  downsample=downsample,
+                                            speed_unit_override=speed_unit_override)
+
+        # Show detected speed unit so user knows if override is needed
+        detected = user_df.attrs.get("speed_unit", "unknown")
+        with st.sidebar:
+            st.info(f"⚡ Speed detected as: **{detected}**\n\nIf the speed chart looks wrong, change the override above.", icon="ℹ️")
 
         if show_raw:
             with st.expander("Raw data preview (first 200 rows)"):
