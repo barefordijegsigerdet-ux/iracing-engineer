@@ -2,7 +2,6 @@ import difflib
 import io
 import streamlit as st
 import pandas as pd
-import numpy as np
 
 SCHEMA = {
     "distance": ["distance", "lapdist", "lapdistpct", "track_position"],
@@ -18,18 +17,6 @@ SCHEMA = {
     "gear": ["gear", "currentgear"],
 }
 
-ESSENTIAL_COLS = ["distance", "speed", "throttle", "brake"]
-OPTIONAL_COLS  = ["time", "lataccel", "longaccel", "lat", "lon", "steer", "gear"]
-
-def _match_column(target, aliases, available):
-    alias_set = set(aliases)
-    for col in available:
-        if col in alias_set: return col
-    for col in available:
-        if target in col: return col
-    matches = difflib.get_close_matches(target, available, n=1, cutoff=0.65)
-    return matches[0] if matches else None
-
 def normalize_telemetry(df):
     df = df.copy()
     df.columns = [str(c).lower().strip() for c in df.columns]
@@ -37,19 +24,24 @@ def normalize_telemetry(df):
     rename_map = {}
     
     for target, aliases in SCHEMA.items():
-        matched = _match_column(target, aliases, available)
-        if matched: rename_map[matched] = target
+        # Find the best match for each required channel
+        for alias in aliases:
+            if alias in available:
+                rename_map[alias] = target
+                break
 
     speed_src = next((k for k, v in rename_map.items() if v == "speed"), "")
     df = df.rename(columns=rename_map)
 
-    for opt in OPTIONAL_COLS:
+    # Fill missing optional columns with zeros
+    for opt in ["time", "lataccel", "longaccel", "lat", "lon", "steer", "gear"]:
         if opt not in df.columns: df[opt] = 0.0
 
-    # Auto-units
+    # Auto-scale Throttle/Brake
     if df["throttle"].max() <= 1.05: df["throttle"] *= 100.0
     if df["brake"].max() <= 1.05: df["brake"] *= 100.0
 
+    # Unit Detection logic
     max_spd = df["speed"].max()
     if "mph" in speed_src.lower() or (max_spd < 250 and "km" not in speed_src.lower() and max_spd > 100):
         df["speed"] *= 1.60934
