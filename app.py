@@ -71,8 +71,8 @@ def get_ai_analysis(u_stats, r_stats, zone_name):
 # --- SIDEBAR ---
 with st.sidebar:
     st.header("📂 Data Setup")
-    u_file = st.text_input("Din fil (CSV):", "Jonas.csv")
-    r_file = st.text_input("Reference fil (CSV):", "Leeroy.csv")
+    u_file = st.text_input("Din fil (CSV):", "jonas.csv")
+    r_file = st.text_input("Reference fil (CSV):", "leeroy.csv")
     st.divider()
     sensitivity = st.slider("Coach Følsomhed (tidstab)", 0.05, 0.50, 0.10)
     t_len = st.number_input("Banelængde (m)", value=4252)
