@@ -2,16 +2,18 @@ import numpy as np
 
 def calculate_physics_metrics(user_df, ref_df):
     """
-    Beregner avancerede metrics som G-sum for at analysere dækkets udnyttelse.
+    Beregner metrics som G-sum. 
+    Hvis data mangler, returneres df uændret for at undgå crash.
     """
     for df in [user_df, ref_df]:
-        # Beregn G-Sum (kombineret lateral og longitudinal kraft)
-        # Vi sikrer os at værdierne eksisterer via ingestion.py
-        df['g_sum'] = np.sqrt(df['lataccel']**2 + df['longaccel']**2)
-        
-        # Beregn dækslip-estimat (simpelt eksempel baseret på fart og rat)
-        # Kan udvides hvis du har WheelSpeed data
-        if 'steer' in df.columns:
+        # Tjek om vi har de nødvendige accelerationstal
+        if 'lataccel' in df.columns and 'longaccel' in df.columns:
+            # np.sqrt(a^2 + b^2)
+            df['g_sum'] = np.sqrt(df['lataccel']**2 + df['longaccel']**2)
+        else:
+            df['g_sum'] = 0
+            
+        if 'steer' in df.columns and 'speed' in df.columns:
             df['slip_est'] = (df['steer'].abs() * df['speed']) / 1000
         else:
             df['slip_est'] = 0
