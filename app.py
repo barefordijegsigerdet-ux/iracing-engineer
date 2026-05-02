@@ -10,8 +10,7 @@ import google.generativeai as genai
 # --- KONFIGURATION & AI SETUP ---
 st.set_page_config(page_title="iRacing Universal Coach", layout="wide")
 
-# Hent API nøgle fra Streamlit Secrets
-# RETTELSE: Vi tjekker nu efter GOOGLE_API_KEY som er det du har i dine secrets
+# Vi bruger GOOGLE_API_KEY, da det er det, din test viser er "True"
 if "GOOGLE_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
     
@@ -27,9 +26,10 @@ if "GOOGLE_API_KEY" in st.secrets:
     
     Style: Concise, technical, and honest. Separate Technical Errors from Input Issues.
     """
+    # Vi bruger 'gemini-1.5-flash' her - den er lynhurtig og gratis
     model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=SYSTEM_INSTRUCTION)
 else:
-    st.warning("⚠️ API nøgle ikke fundet. Tilføj GOOGLE_API_KEY i Streamlit Cloud Secrets for at aktivere AI Coach.")
+    st.warning("⚠️ Kunne ikke finde GOOGLE_API_KEY i dine Secrets.")
     
 # --- GITHUB CONFIG ---
 USER = "barefordijegsigerdet-ux"
