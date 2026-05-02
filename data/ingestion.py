@@ -2,6 +2,7 @@ import io
 import pandas as pd
 import streamlit as st
 
+# Comprehensive mapping for various telemetry providers
 SCHEMA = {
     "distance": ["distance", "lapdist", "track_position", "dist", "pos"],
     "speed": ["speed", "velocity", "v", "speed (km/h)", "speed (mph)"],
@@ -14,7 +15,7 @@ SCHEMA = {
 }
 
 def normalize_telemetry(df):
-    # Standardize column names for easier matching
+    # Clean column names: lowercase, no spaces, no underscores
     df.columns = [str(c).lower().strip().replace("_", "") for c in df.columns]
     rename_map = {}
 
@@ -27,14 +28,13 @@ def normalize_telemetry(df):
     
     df = df.rename(columns=rename_map)
 
-    # CRITICAL: Fix for the KeyError. 
-    # If columns are missing, we create them with 0s so charts.py doesn't crash.
+    # GUARANTEE columns exist to prevent KeyErrors in physics/charts
     required_columns = ["distance", "speed", "throttle", "brake", "lataccel", "longaccel", "lat", "lon"]
     for col in required_columns:
         if col not in df.columns:
             df[col] = 0.0 
 
-    # Scaling for 0.0-1.0 formats
+    # Standardize 0-100 scale for pedals
     if df["throttle"].max() <= 1.05: df["throttle"] *= 100.0
     if df["brake"].max() <= 1.05: df["brake"] *= 100.0
     
@@ -42,6 +42,6 @@ def normalize_telemetry(df):
 
 @st.cache_data
 def load_and_process_data(file_bytes):
-    # comment='#' skips the metadata lines at the top of Garage 61 CSVs
+    # comment='#' skips the metadata lines found in Garage 61 and MoTeC exports
     df = pd.read_csv(io.StringIO(file_bytes.read().decode("utf-8", errors="ignore")), comment='#')
     return normalize_telemetry(df)
