@@ -1,5 +1,5 @@
 import streamlit as st
-from streamlit_plotly_events import plotly_events # Husk at importere denne!
+from streamlit_plotly_events import plotly_events
 from data.ingestion import load_and_process_data
 from data.physics import calculate_physics_metrics
 from components.charts import create_main_telemetry, create_track_map
@@ -10,9 +10,14 @@ st.set_page_config(page_title="RaceEngineer AI", layout="wide")
 if "hover_dist" not in st.session_state:
     st.session_state.hover_dist = 0
 
-# ... (din file uploader kode)
+# --- HER ER DE MANGLENDE LINJER ---
+st.sidebar.title("🏁 Session Data")
+u_file = st.sidebar.file_uploader("Upload Your Lap (CSV)", type="csv")
+r_file = st.sidebar.file_uploader("Upload Reference Lap (CSV)", type="csv")
+# ---------------------------------
 
 if u_file and r_file:
+    # Indlæs og behandl data
     u_df, r_df = load_and_process_data(u_file, r_file)
     u_df, r_df = calculate_physics_metrics(u_df, r_df)
 
@@ -42,3 +47,6 @@ if u_file and r_file:
             st.plotly_chart(fig_map, use_container_width=True, key="side_map")
             
             st.metric("Dist", f"{st.session_state.hover_dist:.0f} m")
+
+else:
+    st.info("Upload venligst begge CSV filer i sidebaren for at starte analysen.")
