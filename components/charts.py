@@ -30,8 +30,30 @@ def create_friction_circle(user_df, ref_df):
     return fig
 
 def create_track_map(df):
-    fig = go.Figure(go.Scatter(x=df["lon"], y=df["lat"], mode='lines', 
-                               line=dict(color=df["speed"], colorscale='Turbo', width=5)))
-    fig.update_layout(title="GPS Track Map (Speed Heatmap)", template="plotly_dark", 
-                      xaxis=dict(visible=False), yaxis=dict(visible=False, scaleanchor="x"))
+    # Using Scattergl with markers to allow color arrays (Speed Heatmap)
+    fig = go.Figure(go.Scattergl(
+        x=df["lon"], 
+        y=df["lat"], 
+        mode='markers', # Changed from 'lines' to 'markers' to support color arrays
+        marker=dict(
+            color=df["speed"],
+            colorscale='Turbo',
+            size=4,
+            showscale=True,
+            colorbar=dict(title="Speed (km/h)")
+        ),
+        hovertemplate="Speed: %{marker.color:.1f} km/h<extra></extra>"
+    ))
+    
+    fig.update_layout(
+        title="GPS Track Map (Speed Heatmap)", 
+        template="plotly_dark", 
+        xaxis=dict(visible=False), 
+        yaxis=dict(
+            visible=False, 
+            scaleanchor="x", 
+            scaleratio=1
+        ),
+        margin=dict(l=20, r=20, t=40, b=20)
+    )
     return fig
