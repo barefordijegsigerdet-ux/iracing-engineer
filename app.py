@@ -12,9 +12,10 @@ st.write("Kan se nøgle:", "GOOGLE_API_KEY" in st.secrets)
 st.set_page_config(page_title="iRacing Universal Coach", layout="wide")
 
 # Hent API nøgle fra Streamlit Secrets
-if "GEMINI_API_KEY" in st.secrets:
+# RETTELSE: Vi tjekker nu efter GOOGLE_API_KEY som er det du har i dine secrets
+if "GOOGLE_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    # Her indsætter vi din system instruction
+    
     SYSTEM_INSTRUCTION = """
     You are a professional, data-driven Race Engineer and Driver Coach. Your goal is to identify time loss and optimize driver performance across any car and track combination in iRacing.
     
@@ -30,7 +31,7 @@ if "GEMINI_API_KEY" in st.secrets:
     model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=SYSTEM_INSTRUCTION)
 else:
     st.warning("⚠️ API nøgle ikke fundet. Tilføj GOOGLE_API_KEY i Streamlit Cloud Secrets for at aktivere AI Coach.")
-
+    
 # --- GITHUB CONFIG ---
 USER = "barefordijegsigerdet-ux"
 REPO = "iracing-engineer"
