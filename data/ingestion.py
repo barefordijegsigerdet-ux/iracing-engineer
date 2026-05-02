@@ -26,13 +26,14 @@ def normalize_telemetry(df):
     
     df = df.rename(columns=rename_map)
 
-    # SCALING LOGIC: Convert 0.0-1.0 to 0-100%
-    # We check if the max is <= 1.1 to avoid double-scaling if data is already 0-100
+   # SCALING LOGIC: Convert 0.0-1.0 to 0-100% and remove decimals
     if df["throttle"].max() <= 1.1:
-        df["throttle"] = df["throttle"] * 100.0
+        # Scale, round to nearest whole number, and convert to integer
+        df["throttle"] = (df["throttle"] * 100.0).round().astype(int)
         
     if df["brake"].max() <= 1.1:
-        df["brake"] = df["brake"] * 100.0
+        # Scale, round to nearest whole number, and convert to integer
+        df["brake"] = (df["brake"] * 100.0).round().astype(int)
 
     # Ensure distance and other required columns exist
     required = ["distance", "speed", "throttle", "brake", "lataccel", "longaccel", "lat", "lon"]
