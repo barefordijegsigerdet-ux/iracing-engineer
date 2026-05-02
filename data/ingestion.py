@@ -4,31 +4,35 @@ def load_and_process_data(u_file, r_file):
     u_df = pd.read_csv(u_file)
     r_df = pd.read_csv(r_file)
 
-    # Mapping der matcher din Zandvoort-fil præcis
+    # Mapping til at ensrette kolonnenavne fra din Porsche-fil
     column_mapping = {
-        'LapDistPct': 'distance',  # Fixer image_7ab439.png x-akse
-        'Gear': 'gear',            # Fixer KeyError: 'gear'
+        'LapDistPct': 'distance', 
+        'Gear': 'gear',           
         'Speed': 'speed',
         'Throttle': 'throttle',
         'Brake': 'brake',
-        'LatAccel': 'lataccel',    # Fixer KeyError i physics.py
+        'LatAccel': 'lataccel',   
         'LongAccel': 'longaccel',
-        'SteeringWheelAngle': 'steer'
+        'Delta': 'delta' # Prøv at finde delta hvis den findes
     }
 
     u_df.rename(columns=column_mapping, inplace=True)
     r_df.rename(columns=column_mapping, inplace=True)
 
-    # Konverter til tal og håndter manglende værdier
-    numeric_cols = ['distance', 'speed', 'gear', 'throttle', 'brake', 'lataccel', 'longaccel']
+    # --- FIX FOR DELTA KEYERROR ---
+    # Hvis 'delta' ikke findes i filen, opretter vi den med 0-værdier
+    # så create_main_telemetry ikke fejler
     for df in [u_df, r_df]:
-        for col in numeric_cols:
+        if 'delta' not in df.columns:
+            df['delta'] = 0.0  # Gør grafen flad i stedet for at crashe
+            
+        # Sikre numeriske data for alle kritiske kolonner
+        cols = ['distance', 'speed', 'gear', 'throttle', 'brake', 'delta']
+        for col in cols:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-            else:
-                df[col] = 0
 
-    # Sorter efter distance for at undgå zig-zag grafer
+    # Sorter efter distance
     u_df = u_df.sort_values('distance').reset_index(drop=True)
     r_df = r_df.sort_values('distance').reset_index(drop=True)
 
