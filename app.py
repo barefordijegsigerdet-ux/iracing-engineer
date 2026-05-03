@@ -4,6 +4,7 @@ from PIL import Image
 import streamlit.components.v1 as components
 from engine.setup_logic import get_vehicle_advice
 from engine.coaching_tips import get_track_data
+from streamlit_paste_button import paste_image_button # Importér den nye knap
 
 # --- 1. SIKKERHED & AI KONFIGURATION ---
 try:
@@ -94,27 +95,37 @@ with tab2:
     
     with col_img:
         st.subheader("Garage 61 Data")
-        # Her uploader du dine screenshots som f.eks. image_7aa89e.png
-        telemetry_img = st.file_uploader("Upload screenshot af din telemetri (Speed/Throttle)", type=["png", "jpg", "jpeg"])
         
+        # Mulighed 1: Traditionel upload
+        telemetry_img = st.file_uploader("Upload screenshot", type=["png", "jpg", "jpeg"])
+        
+        # Mulighed 2: Paste fra Clipboard
+        st.write("ELLER")
+        pasted_output = paste_image_button(
+            label="📋 Paste fra Clipboard",
+            background_color="#FF4B4B",
+            hover_background_color="#333",
+            errors="ignore"
+        )
+        
+        # Logik til at vælge hvilket billede der skal bruges
+        final_img = None
         if telemetry_img:
-            st.image(telemetry_img, caption="Session Telemetri", use_container_width=True)
-        else:
-            st.info("Upload et billede (f.eks. din kørsel vs. referencen) for at starte analysen.")
+            final_img = Image.open(telemetry_img)
+        elif pasted_output.image_data is not None:
+            final_img = pasted_output.image_data
+            
+        if final_img:
+            st.image(final_img, caption="Session Telemetri", use_container_width=True)
 
     with col_ai:
         st.subheader("🤖 AI Engineer Feedback")
-        # AI kører KUN når brugeren klikker på knappen
-        if telemetry_img and st.button("🚀 Analysér min kørsel nu"):
-            img = Image.open(telemetry_img)
-            
-            # Skræddersyet prompt til racing telemetri
-            prompt = f"""
-            Du er en professionel Driver Coach. Analysér dette Garage 61 screenshot for en {selected_car}.
-            Kig på den blå linje (brugeren) vs. den røde (referencen). 
-            Identificér præcis hvor der tabes tid (Braking point, Apex speed eller Exit).
-            Giv 3 konkrete tips til at forbedre omgangstiden.
-            """
+        # Nu tjekker vi på final_img i stedet for kun telemetry_img
+        if final_img and st.button("🚀 Analysér min kørsel nu"):
+            # Din eksisterende AI logik her...
+            with st.spinner("AI'en kigger på dit udklip..."):
+                response = model.generate_content([prompt, final_img])
+                st.markdown(response.text)
             
             with st.spinner("AI'en tygger på dine data..."):
                 try:
