@@ -1,43 +1,88 @@
 import streamlit as st
+import google.generativeai as genai
+from PIL import Image
 from engine.setup_logic import get_vehicle_advice
 from engine.coaching_tips import get_track_data
 
-st.set_page_config(page_title="iRacing Engineer Pro", layout="wide")
+# --- KONFIGURATION ---
+st.set_page_config(page_title="iRacing AI Engineer", page_icon="🏎️", layout="wide")
 
-# Sidebjælke: Valg af Bil og Værktøj
-st.sidebar.title("🏎️ Pro iRacing Tools")
-tool = st.sidebar.radio("Vælg værktøj", ["Setup Advisor", "Driver Coach"])
+# Opsætning af Gemini (Gemini 3.1 Flash Image Preview er ideel til screenshots)
+# Erstat 'DIN_API_NØGLE' med din faktiske nøgle fra Google AI Studio
+API_KEY = "DIN_API_NØGLE" 
+genai.configure(api_key=API_KEY)
+model = genai.GenerativeModel('gemini-3.1-flash-image-preview')
 
-if tool == "Setup Advisor":
-    st.title("🛠️ Setup Engineer")
-    
-    # Bil-valg
-    car = st.selectbox("Vælg din bil:", ["Porsche 911 Cup (992)", "GT3 Class (General)", "Formula 4 / Super Formula"])
-    
-    # Symptom-valg
-    problem = st.selectbox("Hvad mærker du?", ["Understyring (Indgang)", "Overstyring (Exit)", "Nervøs på curbs", "Bundskrab (Bottoming)"])
-    
-    advice = get_vehicle_advice(car, problem)
-    st.info(f"**Anbefaling for {car}:**\n\n{advice}")
+# --- FUNKTIONER ---
+def analyze_with_ai(image, car_name):
+    prompt = f"""
+    Du er en professionel Race Engineer. Her er et telemetri-screenshot fra Garage 61 for en {car_name}.
+    Sammenlign brugerens linje med referencen og identificér de 3 vigtigste steder hvor der tabes tid.
+    Giv konkrete råd til enten setup-ændringer eller køreteknik. Vær kort og kontant.
+    """
+    response = model.generate_content([prompt, image])
+    return response.text
 
-elif tool == "Driver Coach":
-    st.title("🏁 Driver Coaching")
-    
-    # Bane-valg (Dynamisk liste)
-    track_name = st.selectbox("Vælg bane:", ["Zandvoort", "Spa-Francorchamps", "Monza"])
-    data = get_track_data(track_name)
-    
+# --- UI DESIGN ---
+st.title("🏎️ iRacing AI Engineer & Setup Exporter")
+st.sidebar.title("Kontrolpanel")
+mode = st.sidebar.radio("Vælg værktøj:", ["🛠️ Setup & AI Analyse", "🏁 Driver Coach"])
+
+if mode == "🛠️ Setup & AI Analyse":
     col1, col2 = st.columns([1, 1])
     
     with col1:
-        if data["map"]:
-            st.image(data["map"], caption=f"Banekort: {track_name}")
-            
+        st.header("Konfiguration")
+        selected_car = st.selectbox("Vælg Bil:", ["Porsche 911 Cup (992)", "GT3 Class"])
+        problem = st.selectbox("Hvad mærker du?", ["Understyring (Indgang)", "Overstyring (Exit)", "Nervøs på curbs", "Bundskrab (Bottoming)"])
+        
+        static_advice = get_vehicle_advice(selected_car, problem)
+        st.success(f"**Standard-råd:** {static_advice}")
+        
+        st.write("---")
+        st.subheader("Situationsbestemt AI Analyse")
+        uploaded_file = st.file_uploader("Upload screenshot fra Garage 61 (f.eks. speed/throttle)", type=["png", "jpg", "jpeg"])
+        
+        if uploaded_file and st.button("🚀 Anmod om AI Feedback"):
+            img = Image.open(uploaded_file)
+            with st.spinner("AI Engineer analyserer dine specifikke data..."):
+                try:
+                    ai_response = analyze_with_ai(img, selected_car)
+                    st.session_state['ai_feedback'] = ai_response
+                except Exception as e:
+                    st.error(f"Fejl i AI-forbindelse: {e}")
+
     with col2:
-        st.subheader(f"Track Notes: {track_name}")
-        for corner, note in data["notes"].items():
+        st.header("Engineer Rapport")
+        if 'ai_feedback' in st.session_state:
+            st.markdown("### 🤖 AI Feedback på din session:")
+            st.write(st.session_state['ai_feedback'])
+            
+            # Eksport-mulighed
+            export_text = f"ENGINEER REPORT - {selected_car}\n\nSymptom: {problem}\nStandard Råd: {static_advice}\n\nAI ANALYSE:\n{st.session_state['ai_feedback']}"
+            st.download_button(
+                label="📥 Download Rapport som TXT",
+                data=export_text,
+                file_name="race_engineer_report.txt",
+                mime="text/plain"
+            )
+        else:
+            st.info("Upload et billede og tryk på knappen for at få en specifik analyse af din kørsel.")
+
+elif mode == "🏁 Driver Coach":
+    st.header("Bane-reference")
+    selected_track = st.selectbox("Vælg Bane:", ["Zandvoort", "Spa"])
+    track_info = get_track_data(selected_track)
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        if track_info["map"]:
+            st.image(track_info["map"], caption=f"Kort over {selected_track}")
+    with c2:
+        st.subheader("Coach Noter")
+        for corner, note in track_info["notes"].items():
             with st.expander(corner):
                 st.write(note)
 
 st.sidebar.write("---")
-st.sidebar.caption("Hostet version v1.2")
+st.sidebar.caption("Version 2.0 - Powered by Gemini 3.1 Flash")
