@@ -9,7 +9,7 @@ st.set_page_config(page_title="iRacing AI Engineer", page_icon="🏎️", layout
 
 # Opsætning af Gemini (Gemini 3.1 Flash Image Preview er ideel til screenshots)
 # Erstat 'DIN_API_NØGLE' med din faktiske nøgle fra Google AI Studio
-API_KEY = "DIN_API_NØGLE" 
+API_KEY = "AIzaSyDT9ZjfNfgbK1LjEEGXc7jwrDI5LJQXsfI" 
 genai.configure(api_key=API_KEY)
 model = genai.GenerativeModel('gemini-3.1-flash-image-preview')
 
