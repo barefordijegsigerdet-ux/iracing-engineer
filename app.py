@@ -71,6 +71,11 @@ with tab1:
 # --- TAB 2: DRIVER COACH ---
 with tab2:
     st.header("Telemetri Analyse & Coaching")
+    
+    # Initialiser session log hvis den ikke findes
+    if 'session_log' not in st.session_state:
+        st.session_state.session_log = []
+
     col_img, col_ai = st.columns([1, 1])
     
     with col_img:
@@ -87,10 +92,6 @@ with tab2:
             
         if final_img:
             st.image(final_img, caption="Session Telemetri", use_container_width=True)
-            # Nulstil gammel analyse hvis et nyt billede er fundet
-            if 'last_img_id' not in st.session_state or st.session_state.last_img_id != id(final_img):
-                if 'last_analysis' in st.session_state: del st.session_state.last_analysis
-                st.session_state.last_img_id = id(final_img)
 
     with col_ai:
         st.subheader("🤖 AI Engineer Feedback")
@@ -98,21 +99,42 @@ with tab2:
 
         if final_img:
             if st.button("🚀 Analysér min kørsel nu"):
-                with st.spinner("AI Engineer analyserer grafer... (Husk 15 RPM limit)"):
+                with st.spinner("AI Engineer analyserer grafer..."):
                     try:
                         response = model.generate_content([prompt, final_img])
-                        st.markdown(response.text)
-                        st.session_state['last_analysis'] = response.text
+                        analysis_text = response.text
+                        
+                        # Gem i session loggen med tidsstempel
+                        import datetime
+                        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+                        st.session_state.session_log.append({
+                            "time": timestamp,
+                            "content": analysis_text
+                        })
+                        
+                        st.markdown(analysis_text)
                     except Exception as e:
-                        if "429" in str(e):
-                            st.error("⚠️ Kvote nået! Vent 30-60 sekunder før næste analyse.")
-                        else:
-                            st.error(f"AI fejl: {e}")
+                        st.error(f"AI fejl: {e}")
         else:
-            st.info("Indlæs et billede til venstre for at starte.")
+            st.info("Indlæs et billede for at starte analysen.")
 
-        if 'last_analysis' in st.session_state:
-            st.download_button(label="📥 Download Coaching Rapport", data=st.session_state['last_analysis'], file_name="coach_report.txt")
-
+    # --- SESSION LOGGER SEKTION (Nederst på Tab 2) ---
+    if st.session_state.session_log:
+        st.write("---")
+        st.subheader("📋 Session Log")
+        
+        # Vis alle tidligere analyser i expandere
+        for i, entry in enumerate(reversed(st.session_state.session_log)):
+            with st.expander(f"Analyse kl. {entry['time']} (Forsøg {len(st.session_state.session_log) - i})"):
+                st.write(entry['content'])
+        
+        # Download hele loggen som én fil
+        full_log = "\n\n".join([f"--- KL. {e['time']} ---\n{e['content']}" for e in st.session_state.session_log])
+        st.download_button(
+            label="📥 Download Fuld Session Log",
+            data=full_log,
+            file_name=f"iracing_session_{datetime.date.today()}.txt",
+            mime="text/plain"
+        )
 st.sidebar.write("---")
 st.sidebar.info("Husk: Du har ~15 analyser i minuttet. Tag gerne små screenshots af specifikke sving for bedre præcision.")
