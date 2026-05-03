@@ -47,19 +47,22 @@ with tab1:
         # Upload af HTML-filen med dit setup fra iRacing/Garage
         setup_file = st.file_uploader("Upload din Garage HTML setup-fil", type=["html"])
         
-       if setup_file:
-            st.success("Setup-fil indlæst!")
-            
-            # Vi prøver at dekode filen med ISO-8859-1, som er standard for mange HTML-exports
-            try:
-                raw_data = setup_file.read()
-                setup_html = raw_data.decode("utf-8")
-            except UnicodeDecodeError:
-                # Hvis UTF-8 fejler, bruger vi Latin-1 (ISO-8859-1)
-                setup_html = raw_data.decode("iso-8859-1")
-            
-            with st.expander("Se indlæst setup"):
-                st.components.v1.html(setup_html, height=400, scrolling=True)
+      if setup_file:
+    st.success("Setup-fil indlæst!")
+    
+    # Reset fil-markøren så vi altid læser fra starten
+    setup_file.seek(0)
+    raw_data = setup_file.read()
+    
+    try:
+        # Prøv standard UTF-8 først
+        setup_html = raw_data.decode("utf-8")
+    except UnicodeDecodeError:
+        # Hvis det fejler (typisk ved iRacing HTML), brug Latin-1
+        setup_html = raw_data.decode("iso-8859-1")
+    
+    with st.expander("Se indlæst setup"):
+        st.components.v1.html(setup_html, height=400, scrolling=True)
 
     with col_advice:
         st.subheader("Troubleshooting")
