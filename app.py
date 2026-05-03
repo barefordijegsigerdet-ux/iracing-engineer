@@ -34,39 +34,59 @@ tab1, tab2 = st.tabs(["🛠️ Setup Advisor", "🏁 Driver Coach"])
 
 # --- TAB 1: SETUP ADVISOR ---
 with tab1:
-    st.header("Setup Management")
+    st.header("Setup Management & Engineer Analysis")
+    
     col_config, col_advice = st.columns([1, 1])
     
     with col_config:
-        st.subheader("Aktuelt Setup")
-        selected_car = st.selectbox("Vælg Bil:", ["Porsche 911 Cup (992)", "GT3 Class"])
-        setup_file = st.file_uploader("Upload din Garage HTML setup-fil", type=["html"])
+        st.subheader("Konfiguration")
+        selected_car = st.selectbox("Bil:", ["Porsche 911 Cup (992)", "GT3 Class", "F4"])
+        selected_track = st.text_input("Bane (f.eks. Nürburgring):", "Nürburgring Nordschleife")
         
+        setup_file = st.file_uploader("Upload Garage HTML setup", type=["html"], key="setup_uploader")
+        
+        setup_text_content = ""
         if setup_file:
-            st.success("Setup-fil indlæst!")
-            setup_file.seek(0)
-            raw_data = setup_file.read()
+            # Læs HTML ind som tekst så AI'en kan forstå tallene
+            setup_bytes = setup_file.read()
             try:
-                setup_html = raw_data.decode("utf-8")
-            except UnicodeDecodeError:
-                setup_html = raw_data.decode("iso-8859-1")
-            
-            with st.expander("Se indlæst setup"):
-                components.html(setup_html, height=400, scrolling=True)
+                setup_text_content = setup_bytes.decode("utf-8")
+            except:
+                setup_text_content = setup_bytes.decode("iso-8859-1")
+            st.success("Setup data udtrukket!")
 
     with col_advice:
-        st.subheader("Troubleshooting")
-        problem = st.selectbox("Hvilket symptom har bilen?", [
-            "Understyring (Indgang)", "Understyring (Mid-corner)", 
-            "Overstyring (Exit)", "Bumpy / Ustabil over curbs"
-        ])
-        advice = get_vehicle_advice(selected_car, problem)
-        st.info(f"**Ingeniørens anbefaling:**\n\n{advice}")
-        st.download_button(
-            label="📥 Eksporter Rettelses-guide",
-            data=f"Setup rettelse for {selected_car}:\nProblem: {problem}\nLøsning: {advice}",
-            file_name="setup_fix.txt"
-        )
+        st.subheader("🛠️ AI Setup Engineer")
+        problem_desc = st.text_area("Beskriv bilens opførsel eller dine problemer:", 
+                                   placeholder="Bilen føles meget nervøs over curbs på Nordschleife...")
+
+        if st.button("🔧 Analysér Setup"):
+            if setup_text_content and problem_desc:
+                with st.spinner("Ingeniøren gennemgår dine tal..."):
+                    # Prompt der kombinerer setup-data med brugerens problem
+                    setup_prompt = f"""
+                    Du er en Race Engineer. Her er et iRacing setup i HTML format: {setup_text_content[:2000]}...
+                    Brugeren kører på {selected_track} i en {selected_car}.
+                    Brugeren oplever følgende problem: {problem_desc}
+                    
+                    Kig på de faktiske værdier i settet (fjedre, vinger, dæktryk) og giv 3 konkrete ændringer.
+                    Forklar HVORFOR disse ændringer vil hjælpe på netop denne bane.
+                    """
+                    try:
+                        response = model.generate_content(setup_prompt)
+                        st.markdown(response.text)
+                    except Exception as e:
+                        st.error(f"Kunne ikke analysere setup: {e}")
+            else:
+                st.warning("Upload venligst en fil og beskriv problemet først.")
+
+    st.write("---")
+    st.subheader("Quick Reference: Setup Matrix")
+    # En lille tabel til hurtig selvhjælp
+    st.table({
+        "Problem": ["Understeer (Entry)", "Oversteer (Exit)", "Bouncing over bumps"],
+        "Adjustment": ["Softer Front Springs / More Wing", "Softer Rear Springs / Less Diff Preload", "Lower Slow Compression (Dampers)"]
+    })
 
 # --- TAB 2: DRIVER COACH ---
 with tab2:
