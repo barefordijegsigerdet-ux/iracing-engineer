@@ -95,7 +95,15 @@ with tab2:
 
     with col_ai:
         st.subheader("🤖 AI Engineer Feedback")
-        prompt = "Du er en iRacing Coach. Analysér telemetrien. Sammenlign blå (mig) mod rød (reference). Hvor taber jeg tid? Giv 3 konkrete råd."
+        # Prompten er optimeret til at kigge efter "Coast time" og "Pedal overlap"
+        prompt = """
+        Du er en professionel iRacing Coach. Analysér dette screenshot fra Garage 61.
+        Fokusér på:
+        1. Bremsetryk (Peak pressure og Trail-braking).
+        2. Throttle application (Hvor tidligt og hvor jævnt).
+        3. Coast time (Tid hvor hverken bremse eller gas er aktiveret).
+        Giv 3 konkrete øvelser baseret på de visuelle data.
+        """
 
         if final_img:
             if st.button("🚀 Analysér min kørsel nu"):
@@ -104,7 +112,7 @@ with tab2:
                         response = model.generate_content([prompt, final_img])
                         analysis_text = response.text
                         
-                        # Gem i session loggen med tidsstempel
+                        # Gem i session loggen
                         import datetime
                         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
                         st.session_state.session_log.append({
@@ -114,26 +122,34 @@ with tab2:
                         
                         st.markdown(analysis_text)
                     except Exception as e:
-                        st.error(f"AI fejl: {e}")
+                        if "429" in str(e):
+                            st.error("⚠️ Rate limit nået. Vent 30 sekunder.")
+                        else:
+                            st.error(f"AI fejl: {e}")
         else:
-            st.info("Indlæs et billede for at starte analysen.")
+            st.info("Indlæs telemetri for at modtage coaching.")
 
-    # --- SESSION LOGGER SEKTION (Nederst på Tab 2) ---
+    # --- SESSION LOGGER SEKTION ---
     if st.session_state.session_log:
         st.write("---")
-        st.subheader("📋 Session Log")
+        col_log_header, col_clear = st.columns([3, 1])
+        with col_log_header:
+            st.subheader("📋 Session Log")
+        with col_clear:
+            if st.button("🗑️ Slet Log"):
+                st.session_state.session_log = []
+                st.rerun() # Genindlæser appen så loggen forsvinder med det samme
         
-        # Vis alle tidligere analyser i expandere
         for i, entry in enumerate(reversed(st.session_state.session_log)):
             with st.expander(f"Analyse kl. {entry['time']} (Forsøg {len(st.session_state.session_log) - i})"):
                 st.write(entry['content'])
         
-        # Download hele loggen som én fil
+        # Download log
         full_log = "\n\n".join([f"--- KL. {e['time']} ---\n{e['content']}" for e in st.session_state.session_log])
         st.download_button(
             label="📥 Download Fuld Session Log",
             data=full_log,
-            file_name=f"iracing_session_{datetime.date.today()}.txt",
+            file_name=f"iracing_log_{datetime.date.today()}.txt",
             mime="text/plain"
         )
 st.sidebar.write("---")
