@@ -16,7 +16,7 @@ except KeyError:
     st.stop()
 
 # Vi bruger Gemini 3.1 Flash Image til visuel telemetri-analyse
-model = genai.GenerativeModel('gemini-3.1-flash-image-preview')
+model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
 
 # --- 2. UI DESIGN & LAYOUT ---
 st.set_page_config(page_title="iRacing Pro Engineer", page_icon="🏎️", layout="wide")
