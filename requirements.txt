@@ -1,4 +1,4 @@
 streamlit
 google-generativeai
-pandas
-pillow
+Pillow
+streamlit-paste-button
