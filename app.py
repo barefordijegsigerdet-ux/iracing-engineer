@@ -35,6 +35,7 @@ st.sidebar.caption("Version 2.5 | Hostet Live")
 tab1, tab2 = st.tabs(["🛠️ Setup Advisor", "🏁 Driver Coach"])
 
 # --- TAB 1: SETUP ADVISOR (Håndtering af Garage Setup HTML) ---
+# --- TAB 1: SETUP ADVISOR ---
 with tab1:
     st.header("Setup Management")
     
@@ -44,28 +45,29 @@ with tab1:
         st.subheader("Aktuelt Setup")
         selected_car = st.selectbox("Vælg Bil:", ["Porsche 911 Cup (992)", "GT3 Class"])
         
-        # Upload af HTML-filen med dit setup fra iRacing/Garage
+        # Upload af HTML-filen
         setup_file = st.file_uploader("Upload din Garage HTML setup-fil", type=["html"])
         
-      if setup_file:
-    st.success("Setup-fil indlæst!")
-    
-    # Reset fil-markøren så vi altid læser fra starten
-    setup_file.seek(0)
-    raw_data = setup_file.read()
-    
-    try:
-        # Prøv standard UTF-8 først
-        setup_html = raw_data.decode("utf-8")
-    except UnicodeDecodeError:
-        # Hvis det fejler (typisk ved iRacing HTML), brug Latin-1
-        setup_html = raw_data.decode("iso-8859-1")
-    
-    with st.expander("Se indlæst setup"):
-        st.components.v1.html(setup_html, height=400, scrolling=True)
+        if setup_file:
+            st.success("Setup-fil indlæst!")
+            
+            # Reset fil-markøren og læs rå data
+            setup_file.seek(0)
+            raw_data = setup_file.read()
+            
+            try:
+                # Prøv standard UTF-8 først
+                setup_html = raw_data.decode("utf-8")
+            except UnicodeDecodeError:
+                # Hvis det fejler (iRacing HTML), brug Latin-1
+                setup_html = raw_data.decode("iso-8859-1")
+            
+            with st.expander("Se indlæst setup"):
+                st.components.v1.html(setup_html, height=400, scrolling=True)
 
     with col_advice:
         st.subheader("Troubleshooting")
+        # Resten af din troubleshooting kode her...
         problem = st.selectbox("Hvilket symptom har bilen?", [
             "Understyring (Indgang)", 
             "Understyring (Mid-corner)", 
