@@ -7,12 +7,16 @@ from engine.coaching_tips import get_track_data
 # --- KONFIGURATION ---
 st.set_page_config(page_title="iRacing AI Engineer", page_icon="🏎️", layout="wide")
 
-# Opsætning af Gemini (Gemini 3.1 Flash Image Preview er ideel til screenshots)
-# Erstat 'DIN_API_NØGLE' med din faktiske nøgle fra Google AI Studio
-API_KEY = "AIzaSyDT9ZjfNfgbK1LjEEGXc7jwrDI5LJQXsfI" 
-genai.configure(api_key=API_KEY)
-model = genai.GenerativeModel('gemini-3.1-flash-image-preview')
+# Hent API-nøglen sikkert fra Streamlit Secrets
+try:
+    API_KEY = st.secrets["GEMINI_API_KEY"]
+    genai.configure(api_key=API_KEY)
+except KeyError:
+    st.error("Kunne ikke finde 'GEMINI_API_KEY'. Tjek dine Streamlit Secrets!")
+    st.stop()
 
+# Vælg din foretrukne model (Gemini 3.1 Flash Image Preview som vi aftalte)
+model = genai.GenerativeModel('gemini-3.1-flash-image-preview')
 # --- FUNKTIONER ---
 def analyze_with_ai(image, car_name):
     prompt = f"""
