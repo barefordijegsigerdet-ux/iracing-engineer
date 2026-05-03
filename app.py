@@ -95,12 +95,12 @@ with tab2:
     
     with col_img:
         st.subheader("Garage 61 Data")
-        
         # Mulighed 1: Traditionel upload
         telemetry_img = st.file_uploader("Upload screenshot", type=["png", "jpg", "jpeg"])
         
-        # Mulighed 2: Paste fra Clipboard
         st.write("ELLER")
+        
+        # Mulighed 2: Paste-knap
         pasted_output = paste_image_button(
             label="📋 Paste fra Clipboard",
             background_color="#FF4B4B",
@@ -108,7 +108,7 @@ with tab2:
             errors="ignore"
         )
         
-        # Logik til at vælge hvilket billede der skal bruges
+        # Logik til at vælge billede
         final_img = None
         if telemetry_img:
             final_img = Image.open(telemetry_img)
@@ -120,22 +120,19 @@ with tab2:
 
     with col_ai:
         st.subheader("🤖 AI Engineer Feedback")
-        # Nu tjekker vi på final_img i stedet for kun telemetry_img
+        
+        # VIGTIGT: Definer prompten HER så den er tilgængelig for modellen
+        prompt = "Analysér dette Garage 61 telemetri screenshot. Sammenlign den blå linje med den røde. Hvor taber jeg tid, og hvad kan jeg gøre ved min køreteknik?"
+
         if final_img and st.button("🚀 Analysér min kørsel nu"):
-            # Din eksisterende AI logik her...
-            with st.spinner("AI'en kigger på dit udklip..."):
-                response = model.generate_content([prompt, final_img])
-                st.markdown(response.text)
-            
-            with st.spinner("AI'en tygger på dine data..."):
+            with st.spinner("AI'en kigger på dine grafer..."):
                 try:
-                    response = model.generate_content([prompt, img])
+                    # Nu er både 'prompt' og 'final_img' defineret
+                    response = model.generate_content([prompt, final_img])
                     st.markdown(response.text)
-                    
-                    # Gem resultatet i session_state til eksport
                     st.session_state['last_analysis'] = response.text
                 except Exception as e:
-                    st.error(f"Der opstod en fejl: {e}")
+                    st.error(f"AI fejl: {e}")
         
         # Eksport af AI analysen
         if 'last_analysis' in st.session_state:
