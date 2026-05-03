@@ -3,23 +3,16 @@ def get_track_data(track):
         "Zandvoort": {
             "map": "https://www.iracing.com/wp-content/uploads/2020/06/zandvoort-map.png",
             "notes": {
-                "T1 (Tarzan)": "Brems sent, slip bremsen gradvist for at få næsen ind.",
-                "T3 (Hugenholtz)": "Hold dig højt i bankingen for at få et bedre 'launch' ud."
+                "T1 (Tarzan)": "Brems sent, fokuser på trail-braking for at rotere bilen til en sen apex.",
+                "T3 (Hugenholtz)": "Hold den høje linje i bankingen for at få maksimal fart ud på langsiden."
             }
         },
-        "Spa-Francorchamps": {
+        "Spa": {
             "map": "https://www.iracing.com/wp-content/uploads/2020/06/spa-map.png",
             "notes": {
-                "Eau Rouge": "Hold den fladt, men vær forsigtig med din 'entry' vinkel.",
-                "Bruxelles": "Langt sving, fokusér på tålmodighed på gassen."
-            }
-        },
-        "Monza": {
-            "map": "https://www.iracing.com/wp-content/uploads/2020/06/monza-map.png",
-            "notes": {
-                "Variante del Rettifilo": "Skær curberne aggressivt, men pas på balancen.",
-                "Parabolica": "Åbn svinget tidligt for at maksimere topfart på langsiden."
+                "Eau Rouge": "Hold den fladt, men vær præcis med din 'turn-in'.",
+                "Pouhon": "Vigtigt med høj minimumshastighed. Slip gassen let, men brems minimalt."
             }
         }
     }
-    return track_db.get(track, {"map": "", "notes": {"Info": "Bane-data kommer snart."}})
+    return track_db.get(track, {"map": "", "notes": {"Info": "Vælg en bane for at se noter."}})
