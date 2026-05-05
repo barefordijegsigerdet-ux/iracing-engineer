@@ -6,7 +6,6 @@ import datetime
 
 # --- 1. SIKKERHED & AI KONFIGURATION ---
 try:
-    # Henter nøglen fra Streamlit Cloud Secrets
     API_KEY = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=API_KEY)
 except KeyError:
@@ -19,7 +18,6 @@ model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
 # --- 2. UI DESIGN & LAYOUT ---
 st.set_page_config(page_title="iRacing Pro Engineer", page_icon="🏎️", layout="wide")
 
-# Custom CSS for at give appen et professionelt iRacing/Garage 61 look
 st.markdown("""
     <style>
     .stTabs [data-baseweb="tab-list"] { gap: 24px; }
@@ -30,51 +28,70 @@ st.markdown("""
 
 st.title("🏎️ iRacing Pro Engineer & Driver Coach")
 
-# --- 3. SIDEBAR: GUIDE, CONDITIONS & OM ---
+# --- 3. SIDEBAR: GARAGE 61 SESSION CONDITIONS ---
 with st.sidebar:
     st.header("📖 Session Management")
     
-    # Sektion for vejrforhold (Vigtigt for både setup og kørsel)
-    with st.expander("🌤️ Track Conditions", expanded=True):
-        air_temp = st.number_input("Lufttemperatur (°C)", value=22)
-        track_temp = st.number_input("Banetemperatur (°C)", value=30)
-        usage = st.select_slider("Bane-gummi (Usage)", options=["Clean", "Light", "Moderate", "Heavy", "Greasy"], value="Moderate")
-        weather_notes = st.text_input("Vind/Andet:", placeholder="F.eks. Kraftig sidevind...")
-    
+    with st.expander("🌤️ Garage 61 Conditions", expanded=True):
+        # 1. Sky
+        sky = st.selectbox("Sky", ["Clear skies", "Partly cloudy", "Mostly cloudy", "Overcast", "Cloudy"])
+        
+        # 2. Track Temp & 3. Air Temp
+        col_t1, col_t2 = st.columns(2)
+        track_temp = col_t1.number_input("Track Temp (°C)", value=38.3, step=0.1)
+        air_temp = col_t2.number_input("Air Temp (°C)", value=20.9, step=0.1)
+        
+        # 4. Wind Speed & Direction
+        col_w1, col_w2 = st.columns([2, 1])
+        wind_speed = col_w1.number_input("Wind (km/h)", value=4)
+        wind_dir = col_w2.selectbox("Dir", ["N", "NE", "E", "SE", "S", "SW", "W", "NW", "ENE", "ESE", "WNW", "WSW", "NNE", "NNW", "SSE", "SSW"])
+        
+        # 5. Relative Humidity
+        rel_humidity = st.slider("Rel. Humidity (%)", 0, 100, 82)
+        
+        # 6. Fog Level
+        fog_level = st.slider("Fog Level (%)", 0, 100, 0)
+        
+        # 7. Precipitation
+        precipitation = st.slider("Precipitation (%)", 0, 100, 0)
+        
+        # 8. Track State
+        track_state = st.selectbox("Track State", 
+                                  ["Clean", "Low usage", "Moderately low usage", "Moderate", "Heavy", "Greasy"],
+                                  index=2)
+        
+        # 9. Fuel Level
+        fuel_level = st.number_input("Fuel Level (L)", value=40.88, step=0.01)
+
     # Samler forholdene til AI'en
-    current_conditions = f"Vejr: Luft {air_temp}°C, Bane {track_temp}°C, Gummi: {usage}. Noter: {weather_notes}"
+    current_conditions = (
+        f"FORHOLD: Sky: {sky}, Bane: {track_temp}°C, Luft: {air_temp}°C, "
+        f"Vind: {wind_speed} km/h {wind_dir}, Fugt: {rel_humidity}%, "
+        f"Tåge: {fog_level}%, Regn: {precipitation}%, "
+        f"Bane-state: {track_state}, Brændstof: {fuel_level}L."
+    )
 
     st.write("---")
     
-    with st.expander("🚀 Hurtig Guide"):
-        st.write("""
-        1. **Setup:** Upload Garage HTML og beskriv dit problem.
-        2. **Coach:** Tag screenshot i Garage 61 og tryk 'Paste' (Ctrl+V).
-        3. **Log:** Se din historik og download din session rapport i bunden.
-        """)
-
-    st.write("---")
-
     with st.expander("ℹ️ Om dette projekt"):
         st.markdown(f"""
         **Udviklet af Jonas Hauerbach**
         
-        Dette projekt er skabt for at gøre avanceret data-analyse tilgængelig for alle iRacere, uanset om du kører på Spa, Monza eller Sebring.
+        Dette projekt er skabt for at gøre avanceret data-analyse tilgængelig for alle iRacere, uanset om man jagter tiendedele på Spa, Monza eller de tekniske sving på Sebring.
         
-        Appen bruger **Google Gemini 3.1** vision-teknologi til at analysere dine pedal-inputs og setup-valg i realtid.
+        Appen bruger **Google Gemini 3.1** til at analysere dine pedal-inputs og setup-valg i realtid baseret på dine specifikke baneforhold.
         
         *Kører på Hobby Tier (Gratis kvote). Ved fejl, vent 30 sekunder.*
         """)
     
-    st.sidebar.caption(f"© {datetime.date.today().year} | Version 2.9")
+    st.sidebar.caption(f"© {datetime.date.today().year} | Version 3.0")
 
 # --- 4. TABS ---
 tab1, tab2 = st.tabs(["🛠️ Setup Advisor", "🏁 Driver Coach"])
 
-# --- TAB 1: SETUP ADVISOR (Garage Engineer) ---
+# --- TAB 1: SETUP ADVISOR ---
 with tab1:
     st.header("Setup Management & Engineer Analysis")
-    
     col_setup, col_engineer = st.columns([1, 1])
     
     with col_setup:
@@ -83,7 +100,6 @@ with tab1:
         track_name = st.text_input("Bane:", placeholder="Hvilken bane kører du på?")
         
         setup_file = st.file_uploader("Upload din Garage HTML setup-fil", type=["html"])
-        
         setup_content = ""
         if setup_file:
             raw_data = setup_file.read()
@@ -91,37 +107,33 @@ with tab1:
                 setup_content = raw_data.decode("utf-8")
             except UnicodeDecodeError:
                 setup_content = raw_data.decode("iso-8859-1")
-            st.success("✅ Setup-fil indlæst og scannet!")
+            st.success("✅ Setup-fil scannet!")
 
     with col_engineer:
         st.subheader("🔧 AI Race Engineer")
-        user_issue = st.text_area("Beskriv hvad bilen gør forkert:", 
-                                   placeholder="F.eks.: Bilen føles løs i bagvognen under acceleration ud af langsomme sving...")
+        user_issue = st.text_area("Hvad vil du ændre/forbedre?", 
+                                   placeholder="Beskriv bilens balance...")
         
-        if st.button("🔧 Analysér Setup & Forhold"):
+        if st.button("🔧 Analysér Setup"):
             if setup_content and user_issue:
-                with st.spinner("Ingeniøren gennemgår dine tal og baneforhold..."):
-                    setup_prompt = f"""
-                    Du er en professionel iRacing Engineer.
-                    Bane: {track_name} | Bil: {car_model}
-                    FORHOLD: {current_conditions}
-                    BRUGERENS PROBLEM: {user_issue}
-                    
-                    HER ER SETUP DATA (HTML):
-                    {setup_content[:3000]}
-                    
-                    Giv 3 præcise ændringer i setup'et. Forklar hvor mange 'kliks' eller hvilken retning, 
-                    og hvorfor det løser problemet under de givne vejrforhold.
+                with st.spinner("Ingeniøren beregner ændringer..."):
+                    prompt = f"""
+                    Du er en iRacing Engineer. 
+                    KONTEKST: Bane: {track_name}, Bil: {car_model}. 
+                    FORHOLD: {current_conditions}.
+                    PROBLEM: {user_issue}. 
+                    SETUP DATA: {setup_content[:3000]}. 
+                    Giv 3 konkrete råd til setup-ændringer baseret på disse forhold.
                     """
                     try:
-                        response = model.generate_content(setup_prompt)
+                        response = model.generate_content(prompt)
                         st.info(response.text)
                     except Exception as e:
-                        st.error(f"Ingeniør-fejl: {e}")
+                        st.error(f"Fejl: {e}")
             else:
-                st.warning("Husk at uploade en setup-fil og beskrive dit problem.")
+                st.warning("Indlæs venligst setup og beskriv dit problem.")
 
-# --- TAB 2: DRIVER COACH (Telemetri AI) ---
+# --- TAB 2: DRIVER COACH ---
 with tab2:
     st.header("Telemetri Analyse & Coaching")
     
@@ -133,21 +145,13 @@ with tab2:
     with col_img:
         st.subheader("Garage 61 Data")
         from streamlit_paste_button import paste_image_button
+        pasted_output = paste_image_button(label="📋 Paste screenshot (Ctrl+V)", background_color="#FF4B4B")
         
-        # Mulighed for at paste direkte fra udklipsholder (Meget hurtigere for brugeren)
-        pasted_output = paste_image_button(
-            label="📋 Paste fra Clipboard (Ctrl+V)", 
-            background_color="#FF4B4B",
-            hover_background_color="#333"
-        )
-        
-        tele_file = st.file_uploader("Eller upload screenshot manuelt", type=["png", "jpg", "jpeg"])
+        tele_file = st.file_uploader("Eller upload fil", type=["png", "jpg", "jpeg"])
         
         final_img = None
-        if tele_file:
-            final_img = Image.open(tele_file)
-        elif pasted_output.image_data is not None:
-            final_img = pasted_output.image_data
+        if tele_file: final_img = Image.open(tele_file)
+        elif pasted_output.image_data is not None: final_img = pasted_output.image_data
             
         if final_img:
             st.image(final_img, caption="Session Telemetri", use_container_width=True)
@@ -156,40 +160,32 @@ with tab2:
         st.subheader("🤖 AI Driver Coach")
         if final_img:
             if st.button("🚀 Analysér min kørsel nu"):
-                with st.spinner("Coachen analyserer dine pedaler..."):
-                    coach_prompt = f"""
-                    Du er en iRacing Coach. Analysér dette Garage 61 screenshot.
-                    INFO: {current_conditions}
-                    Fokusér på:
-                    1. Bremsetryk og Trail-braking (Blå vs Rød).
-                    2. Throttle application (Jævnhed og timing).
-                    3. Coast time (Hvor hverken gas eller bremse bruges).
-                    
+                with st.spinner("Coachen analyserer dine data..."):
+                    prompt = f"""
+                    Analysér denne iRacing telemetri. 
+                    SESSION INFO: {current_conditions}. 
+                    Fokusér på bremsetryk (blå vs rød), throttle timing og coast time. 
                     Giv 3 konkrete øvelser til næste stint.
                     """
                     try:
-                        response = model.generate_content([coach_prompt, final_img])
-                        analysis_text = response.text
-                        
-                        # Log resultatet
-                        timestamp = datetime.datetime.now().strftime("%H:%M")
+                        response = model.generate_content([prompt, final_img])
+                        analysis = response.text
                         st.session_state.session_log.append({
-                            "time": timestamp,
-                            "content": analysis_text
+                            "time": datetime.datetime.now().strftime("%H:%M"), 
+                            "content": analysis
                         })
-                        
-                        st.markdown(analysis_text)
+                        st.markdown(analysis)
                     except Exception as e:
-                        st.error(f"Coach fejl: {e}")
+                        st.error(f"Fejl: {e}")
         else:
-            st.info("Tag et screenshot i Garage 61 og paste det herover for at få feedback.")
+            st.info("Paste et screenshot fra Garage 61 for at få feedback.")
 
-    # --- SESSION LOGGER (Bund) ---
+    # --- SESSION LOG ---
     if st.session_state.session_log:
         st.write("---")
-        col_log_h, col_log_c = st.columns([3, 1])
-        col_log_h.subheader("📋 Session Log")
-        if col_log_c.button("🗑️ Slet Log"):
+        col_h, col_c = st.columns([3, 1])
+        col_h.subheader("📋 Session Log")
+        if col_c.button("🗑️ Slet Log"):
             st.session_state.session_log = []
             st.rerun()
         
@@ -197,6 +193,5 @@ with tab2:
             with st.expander(f"Analyse kl. {entry['time']}"):
                 st.write(entry['content'])
         
-        # Download samlet rapport
         full_report = "\n\n".join([f"--- KL. {e['time']} ---\n{e['content']}" for e in st.session_state.session_log])
-        st.download_button("📥 Download Fuld Rapport", data=full_report, file_name="session_coaching.txt")
+        st.download_button("📥 Download Rapport", data=full_report, file_name="coaching_report.txt")
