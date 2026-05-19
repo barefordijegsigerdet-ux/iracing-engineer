@@ -430,33 +430,11 @@ def call_ai(system: str, user: str) -> str:
     return model.generate_content(user).text
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  SIDEBAR
-# ═════════════════════════════════════════════════════════════════════════════
-with st.sidebar:
-    st.markdown("## 🏎️ Garage 61")
-    st.markdown("---")
-    st.subheader("⚙️ Coaching")
-    skill = st.selectbox("Niveau", list(LEVEL.keys()))
-    focus = st.selectbox("Fokus",  list(FOCUS.keys()))
-    car   = st.selectbox("Bil", [
-        "Porsche 911 Cup (992.2)", "Porsche 911 GT3 R (992)",
-        "GT3 Class", "F4", "LMP2", "GTP", "Andet"])
-    track = st.text_input("Bane", placeholder="f.eks. Navarra, Le Mans…")
-    st.markdown("---")
-    st.subheader("🌤️ Baneforhold")
-    sky    = st.selectbox("Sky", ["Clear skies","Partly cloudy","Mostly cloudy","Overcast"])
-    ca, cb = st.columns(2)
-    t_temp = ca.number_input("Bane (°C)", value=38.0, step=0.1)
-    a_temp = cb.number_input("Luft (°C)", value=21.0, step=0.1)
-    cw, cd = st.columns([2,1])
-    w_spd  = cw.number_input("Vind (km/h)", value=4)
-    w_dir  = cd.selectbox("Dir", ["N","NE","E","SE","S","SW","W","NW"])
-    hum    = st.slider("Fugt (%)", 0, 100, 50)
-    cond_str = (f"Sky: {sky}, Bane: {t_temp}°C, Luft: {a_temp}°C, "
-                f"Vind: {w_spd} km/h {w_dir}, Fugt: {hum}%")
-    st.markdown("---")
-    st.caption(f"© {datetime.date.today().year} Garage 61 · Gemini-powered")
+# ── No sidebar — settings moved inline ───────────────────────────────────────
+# Fallback conditions string (used by CSV tabs when no XLSX is loaded)
+cond_str = "Ukendt — upload en session XLSX for automatiske baneforhold"
+car   = ""
+track = ""
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  SESSION STATE
@@ -465,25 +443,84 @@ if "log" not in st.session_state:
     st.session_state.log = []
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  HEADER
+#  HEADER + INLINE CONTROLS
 # ═════════════════════════════════════════════════════════════════════════════
 st.markdown("# 🏎️ Garage 61 · Telemetry Coach")
-st.markdown(
-    f"<div class='card'>Bil: <b>{car}</b> &nbsp;·&nbsp; "
-    f"Bane: <b>{track or '—'}</b> &nbsp;·&nbsp; "
-    f"Niveau: <b>{skill}</b> &nbsp;·&nbsp; Fokus: <b>{focus}</b></div>",
-    unsafe_allow_html=True)
+hc1, hc2 = st.columns([1, 1])
+with hc1:
+    skill = st.selectbox("🎓 Coaching-niveau",  list(LEVEL.keys()), label_visibility="visible")
+with hc2:
+    focus = st.selectbox("🔍 Analysefokus", list(FOCUS.keys()), label_visibility="visible")
+st.markdown("---")
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  TABS
 # ═════════════════════════════════════════════════════════════════════════════
-t_sess, t_single, t_cmp, t_learn, t_log = st.tabs([
+t_guide, t_sess, t_single, t_cmp, t_learn, t_log = st.tabs([
+    "🚀 Kom i gang",
     "📋 Session overview",
     "🏁 Enkelt omgang",
     "🔀 Sammenlign omgange",
     "📖 Lær telemetri",
     "📋 Session log",
 ])
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  TAB: KOM I GANG
+# ─────────────────────────────────────────────────────────────────────────────
+with t_guide:
+    st.markdown("## Velkommen til Garage 61 Telemetry Coach")
+    st.markdown(
+        "<div class='card'>Appen hjælper dig med at forstå dine iRacing-data fra Garage 61 — "
+        "uden at du behøver at være ingeniør. Upload dine filer, og AI-coachen fortæller dig "
+        "præcist hvad der sker og hvad du skal øve dig på.</div>",
+        unsafe_allow_html=True)
+
+    st.markdown("### 📁 Hvilke filer bruger jeg?")
+    fc1, fc2 = st.columns(2, gap="large")
+    with fc1:
+        st.markdown("""<div class='learn-card'>
+<h4>📋 Session XLSX — til Session overview</h4>
+<p>Eksporter hele weekenden fra Garage 61:<br><br>
+<b>Garage 61 → Sessions → vælg session → Export → Excel (.xlsx)</b><br><br>
+Én fil indeholder Practice, Kval og Race samlet.
+Appen henter automatisk bil, bane, kørernavn og baneforhold — du skal ikke taste noget selv.</p>
+</div>""", unsafe_allow_html=True)
+
+    with fc2:
+        st.markdown("""<div class='learn-card'>
+<h4>🏁 Lap CSV — til enkelt omgang og sammenligning</h4>
+<p>Eksporter en enkelt omgang fra Garage 61:<br><br>
+<b>Garage 61 → Sessions → vælg omgang → Export → CSV</b><br><br>
+CSV-filen indeholder ~14.000 datapunkter per omgang med fuld sensor-data:
+speed, gas, bremse, gear, G-kræfter og ABS.</p>
+</div>""", unsafe_allow_html=True)
+
+    st.markdown("### 🗺️ Faneoversigt")
+    tabs_info = [
+        ("📋 Session overview",   "Upload XLSX. Få laptider, sektortider og AI-analyse af hele weekenden — Practice, Kval og Race i separate faner."),
+        ("🏁 Enkelt omgang",      "Upload én lap CSV. Se fuld telemetri-trace (speed, gas, bremse, gear, G-kræfter) og få AI-coaching baseret på præcise nøgletal."),
+        ("🔀 Sammenlign omgange", "Upload to lap CSVs. Se speed overlay og delta-graf der viser præcist hvor på banen du er hurtigere eller langsommere end referencen."),
+        ("📖 Lær telemetri",      "Forklaringer på alle kanaler — hvad betyder speed trace, throttle, brake, lateral G osv. Godt udgangspunkt hvis du er ny."),
+        ("📋 Session log",        "Alle AI-analyser fra sessionen gemmes her. Download dem som en samlet rapport når du er færdig."),
+    ]
+    for tab_name, desc in tabs_info:
+        st.markdown(
+            f"<div class='learn-card'><h4>{tab_name}</h4><p>{desc}</p></div>",
+            unsafe_allow_html=True)
+
+    st.markdown("### 🎓 Indstillinger")
+    st.markdown(
+        "<div class='card'>"
+        "<b>Coaching-niveau</b> styrer sproget i AI-svarene — Begynder bruger hverdagsord og analogier, "
+        "Avanceret er teknisk og præcis.<br><br>"
+        "<b>Analysefokus</b> fortæller AI'en hvad den skal prioritere — bremse, gas, speed trace eller alt på én gang."
+        "</div>", unsafe_allow_html=True)
+
+    st.markdown(
+        f"<div style='text-align:center;color:#444;font-size:.8rem;margin-top:2rem'>"
+        f"© {datetime.date.today().year} Garage 61 · Powered by Gemini 3.1 Flash Lite</div>",
+        unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  TAB: SESSION OVERVIEW
