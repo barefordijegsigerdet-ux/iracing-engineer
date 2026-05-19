@@ -1,7 +1,8 @@
 """
 Garage 61 · Telemetry Coach
-CSV format: Speed, LapDistPct, Brake, Throttle, RPM,
-            SteeringWheelAngle, Gear, LatAccel, LongAccel, ABSActive, …
+Understøtter:
+  - Session XLSX  (Overview + Session - Practice/Qualify/Race sheets)
+  - Lap CSV       (Speed, LapDistPct, Throttle, Brake, RPM, Gear, …)
 """
 
 import streamlit as st
@@ -53,6 +54,7 @@ C_ORANGE   = "#FF6B00"
 C_YELLOW   = "#FFD600"
 C_PURPLE   = "#CE93D8"
 C_GREEN    = "#00C48C"
+C_GRAY     = "#444444"
 
 LAYOUT_BASE = dict(
     paper_bgcolor="#0D0D0D", plot_bgcolor="#111",
@@ -60,6 +62,14 @@ LAYOUT_BASE = dict(
     legend=dict(bgcolor="#0D0D0D", bordercolor="#333", borderwidth=1),
     margin=dict(l=50, r=20, t=40, b=40),
 )
+
+SESSION_SHEETS = ["Session - Practice", "Session - Qualify", "Session - Race"]
+SESSION_LABELS = {"Session - Practice": "🔧 Practice",
+                  "Session - Qualify":  "⏱️ Kval",
+                  "Session - Race":     "🏁 Race"}
+SESSION_COLOURS = {"Session - Practice": C_SPEED,
+                   "Session - Qualify":  C_YELLOW,
+                   "Session - Race":     C_ORANGE}
 
 # ── AI prompts ────────────────────────────────────────────────────────────────
 LEVEL = {
@@ -83,9 +93,143 @@ FOCUS = {
     "📈 Speed trace": "Fokuser på minimum-hastighed i sving og exit-hastighed.",
 }
 
-# ── CSV loader ────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+#  HELPERS — SESSION XLSX
+# ═════════════════════════════════════════════════════════════════════════════
+def td_to_s(series: pd.Series) -> pd.Series:
+    return pd.to_timedelta(series, errors="coerce").dt.total_seconds()
+
+
+def fmt_s(s) -> str:
+    """Seconds → M:SS.mmm string"""
+    try:
+        s = float(s)
+        if pd.isna(s) or s <= 0:
+            return "—"
+        return f"{int(s//60)}:{s%60:06.3f}"
+    except Exception:
+        return "—"
+
+
 @st.cache_data(show_spinner=False)
-def load_csv(data: bytes) -> pd.DataFrame:
+def load_session_xlsx(data: bytes) -> dict[str, pd.DataFrame]:
+    """Load all session sheets from a Garage 61 XLSX export."""
+    all_sheets = pd.read_excel(io.BytesIO(data), sheet_name=None)
+    result = {}
+    for sheet in SESSION_SHEETS:
+        if sheet not in all_sheets:
+            continue
+        df = all_sheets[sheet].copy()
+        df["LapSec"] = td_to_s(df["Lap time"])
+        # Auto-detect sector columns
+        sec_cols = [c for c in df.columns if c.startswith("Sector ")]
+        for col in sec_cols:
+            df[col + "_sec"] = td_to_s(df[col])
+        df["LapIndex"] = range(1, len(df) + 1)
+        df["LapStr"]   = df["LapSec"].apply(fmt_s)
+        result[sheet]  = df
+    return result
+
+
+def session_summary_text(df: pd.DataFrame, session_name: str, sec_cols: list) -> str:
+    clean = df[df["Clean"] == 1]
+    lines = [f"=== {session_name} ==="]
+    lines.append(f"Omgange: {len(df)} total, {len(clean)} rene")
+    if not clean.empty:
+        best_idx = clean["LapSec"].idxmin()
+        best     = clean.loc[best_idx]
+        lines.append(f"Bedste omgang: {fmt_s(best['LapSec'])} (lap {int(best['LapIndex'])})")
+        if len(clean) > 1:
+            lines.append(f"Snit rene omgange: {fmt_s(clean['LapSec'].mean())}")
+            lines.append(f"Konsistens (std): {clean['LapSec'].std():.3f}s")
+    for col in sec_cols:
+        scol = col + "_sec"
+        if scol in df.columns:
+            valid = clean[scol].dropna() if not clean.empty else df[scol].dropna()
+            if not valid.empty:
+                lines.append(f"{col} — bedste: {fmt_s(valid.min())} | snit: {fmt_s(valid.mean())}")
+    if "Fuel used" in df.columns:
+        lines.append(f"Brændstof brugt: {df['Fuel used'].sum():.2f} L")
+    return "\n".join(lines)
+
+
+def lap_time_chart(df: pd.DataFrame, label: str, colour: str) -> go.Figure:
+    clean = df[df["Clean"] == 1]
+    fig   = go.Figure()
+    # All laps (faded)
+    fig.add_trace(go.Scatter(
+        x=df["LapIndex"], y=df["LapSec"],
+        mode="lines+markers", name="Alle omgange",
+        line=dict(color=C_GRAY, width=1),
+        marker=dict(color=C_GRAY, size=5),
+        text=df["LapStr"],
+        hovertemplate="Lap %{x}: %{text}<extra></extra>",
+    ))
+    # Clean laps
+    if not clean.empty:
+        fig.add_trace(go.Scatter(
+            x=clean["LapIndex"], y=clean["LapSec"],
+            mode="markers", name="Ren omgang",
+            marker=dict(color=colour, size=9, symbol="circle"),
+            text=clean["LapStr"],
+            hovertemplate="Lap %{x}: %{text} ✓<extra></extra>",
+        ))
+        # Best lap line
+        best_s = clean["LapSec"].min()
+        fig.add_hline(y=best_s, line_dash="dot", line_color=colour,
+                      annotation_text=f"Best: {fmt_s(best_s)}",
+                      annotation_font_color=colour)
+
+    layout = dict(**LAYOUT_BASE)
+    layout["title"]  = dict(text=f"Laptider — {label}", font=dict(color=colour, size=13))
+    layout["height"] = 320
+    layout["xaxis"]  = dict(title="Omgang #", gridcolor="#1e1e1e")
+    layout["yaxis"]  = dict(title="Tid (s)", gridcolor="#1e1e1e")
+    fig.update_layout(**layout)
+    return fig
+
+
+def sector_chart(df: pd.DataFrame, sec_cols: list, colour: str) -> go.Figure | None:
+    clean = df[df["Clean"] == 1]
+    src   = clean if not clean.empty else df
+    data  = []
+    for col in sec_cols:
+        scol = col + "_sec"
+        if scol in df.columns:
+            vals = src[scol].dropna()
+            if not vals.empty:
+                data.append(dict(sector=col, best=vals.min(), mean=vals.mean()))
+    if not data:
+        return None
+    sdf = pd.DataFrame(data)
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=sdf["sector"], y=sdf["best"],
+        name="Bedste", marker_color=colour, opacity=0.9,
+        text=[fmt_s(v) for v in sdf["best"]],
+        textposition="outside",
+    ))
+    fig.add_trace(go.Bar(
+        x=sdf["sector"], y=sdf["mean"],
+        name="Snit", marker_color=colour, opacity=0.4,
+        text=[fmt_s(v) for v in sdf["mean"]],
+        textposition="outside",
+    ))
+    layout = dict(**LAYOUT_BASE)
+    layout["title"]     = dict(text="Sektor-tider", font=dict(color=colour, size=13))
+    layout["height"]    = 300
+    layout["barmode"]   = "group"
+    layout["xaxis"]     = dict(gridcolor="#1e1e1e")
+    layout["yaxis"]     = dict(title="Tid (s)", gridcolor="#1e1e1e")
+    fig.update_layout(**layout)
+    return fig
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  HELPERS — LAP CSV
+# ═════════════════════════════════════════════════════════════════════════════
+@st.cache_data(show_spinner=False)
+def load_lap_csv(data: bytes) -> pd.DataFrame:
     df = pd.read_csv(io.BytesIO(data))
     for col in ["Throttle","Brake","Speed","RPM","Gear","LapDistPct",
                 "LatAccel","LongAccel","SteeringWheelAngle"]:
@@ -93,13 +237,9 @@ def load_csv(data: bytes) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
     df["ThrottlePct"] = df["Throttle"] * 100
     df["BrakePct"]    = df["Brake"]    * 100
-    # iRacing exports Speed in m/s → convert to km/h
-    df["Speed"]       = df["Speed"] * 3.6
-    # Accelerations in m/s² → convert to G
-    if "LatAccel" in df.columns:
-        df["LatAccel"]  = df["LatAccel"]  / 9.81
-    if "LongAccel" in df.columns:
-        df["LongAccel"] = df["LongAccel"] / 9.81
+    df["Speed"]       = df["Speed"]    * 3.6   # m/s → km/h
+    if "LatAccel"  in df.columns: df["LatAccel"]  = df["LatAccel"]  / 9.81
+    if "LongAccel" in df.columns: df["LongAccel"] = df["LongAccel"] / 9.81
     if "ABSActive" in df.columns:
         df["ABSActive"] = df["ABSActive"].astype(str).str.lower() == "true"
     return df.sort_values("LapDistPct").reset_index(drop=True)
@@ -113,56 +253,49 @@ def resample_to(df: pd.DataFrame, n: int = 2000) -> pd.DataFrame:
             out[col] = np.interp(dist, df["LapDistPct"].values, df[col].values)
     return out
 
-# ── Metrics ───────────────────────────────────────────────────────────────────
-def compute_metrics(df: pd.DataFrame) -> dict:
-    m   = {}
-    spd = df["Speed"]
-    thr = df["ThrottlePct"]
-    brk = df["BrakePct"]
 
-    m["speed_max"]         = round(spd.max(), 1)
-    m["speed_mean"]        = round(spd.mean(), 1)
+def compute_lap_metrics(df: pd.DataFrame) -> dict:
+    spd = df["Speed"];  thr = df["ThrottlePct"];  brk = df["BrakePct"]
     low = spd < spd.max() * 0.65
-    m["corner_speed_min"]  = round(spd[low].min(),  1) if low.any() else 0
-    m["corner_speed_mean"] = round(spd[low].mean(), 1) if low.any() else 0
-
-    m["throttle_full_pct"]    = round((thr >= 95).mean() * 100, 1)
-    m["throttle_zero_pct"]    = round((thr <= 5).mean()  * 100, 1)
-    m["throttle_mean"]        = round(thr.mean(), 1)
-
-    m["brake_max"]            = round(brk.max(), 1)
-    m["brake_active_pct"]     = round((brk > 5).mean() * 100, 1)
-    m["brake_mean_active"]    = round(brk[brk > 5].mean(), 1) if (brk > 5).any() else 0
-
-    m["overlap_pct"]          = round(((thr > 10) & (brk > 10)).mean() * 100, 1)
-    m["gear_max"]             = int(df["Gear"].max())
-    m["gear_changes"]         = int(df["Gear"].diff().abs().fillna(0).astype(bool).sum())
-
+    m   = dict(
+        speed_max          = round(spd.max(), 1),
+        speed_mean         = round(spd.mean(), 1),
+        corner_speed_min   = round(spd[low].min(), 1)  if low.any() else 0,
+        corner_speed_mean  = round(spd[low].mean(), 1) if low.any() else 0,
+        throttle_full_pct  = round((thr >= 95).mean() * 100, 1),
+        throttle_zero_pct  = round((thr <= 5).mean()  * 100, 1),
+        throttle_mean      = round(thr.mean(), 1),
+        brake_max          = round(brk.max(), 1),
+        brake_active_pct   = round((brk > 5).mean() * 100, 1),
+        brake_mean_active  = round(brk[brk > 5].mean(), 1) if (brk > 5).any() else 0,
+        overlap_pct        = round(((thr > 10) & (brk > 10)).mean() * 100, 1),
+        gear_max           = int(df["Gear"].max()),
+        gear_changes       = int(df["Gear"].diff().abs().fillna(0).astype(bool).sum()),
+        lat_g_max          = round(df["LatAccel"].abs().max(), 2),
+        long_g_min         = round(df["LongAccel"].min(), 2),
+    )
     if "ABSActive" in df.columns:
         m["abs_interventions"] = int(df["ABSActive"].astype(int).diff().clip(lower=0).sum())
     else:
         m["abs_interventions"] = "N/A"
-
-    m["lat_g_max"]  = round(df["LatAccel"].abs().max(), 2)
-    m["long_g_min"] = round(df["LongAccel"].min(), 2)
     return m
 
 
-def metrics_text(m: dict, label: str = "") -> str:
+def lap_metrics_text(m: dict, label: str = "") -> str:
     return "\n".join([
-        f"=== Nøgletal {label} ===",
+        f"=== Telemetri nøgletal {label} ===",
         f"Tophastighed: {m['speed_max']} km/h | Snit: {m['speed_mean']} km/h",
         f"Min. svinghastighed: {m['corner_speed_min']} km/h | Snit i sving: {m['corner_speed_mean']} km/h",
-        f"Gas — fuld gas: {m['throttle_full_pct']}% af runden | nul gas: {m['throttle_zero_pct']}% | snit: {m['throttle_mean']}%",
-        f"Bremse — max tryk: {m['brake_max']}% | aktiv: {m['brake_active_pct']}% | snit under bremse: {m['brake_mean_active']}%",
-        f"Gas+bremse overlap: {m['overlap_pct']}% af runden",
+        f"Gas — fuld gas: {m['throttle_full_pct']}% | nul gas: {m['throttle_zero_pct']}% | snit: {m['throttle_mean']}%",
+        f"Bremse — max: {m['brake_max']}% | aktiv: {m['brake_active_pct']}% | snit under bremse: {m['brake_mean_active']}%",
+        f"Gas+bremse overlap: {m['overlap_pct']}%",
         f"ABS-indgreb: {m['abs_interventions']}",
         f"Max lateral G: {m['lat_g_max']} | Hårdest bremse-G: {m['long_g_min']}",
         f"Gear skift: {m['gear_changes']} | Højeste gear: {m['gear_max']}",
     ])
 
-# ── Charts ────────────────────────────────────────────────────────────────────
-def main_chart(df: pd.DataFrame, title: str = "") -> go.Figure:
+
+def lap_chart(df: pd.DataFrame, title: str = "") -> go.Figure:
     x   = df["LapDistPct"].values * 100
     fig = make_subplots(
         rows=4, cols=1, shared_xaxes=True,
@@ -172,61 +305,51 @@ def main_chart(df: pd.DataFrame, title: str = "") -> go.Figure:
     )
     fig.add_trace(go.Scatter(x=x, y=df["Speed"], name="Speed",
         line=dict(color=C_SPEED, width=1.5)), row=1, col=1)
-
     if "ABSActive" in df.columns and df["ABSActive"].any():
-        abs_x = df.loc[df["ABSActive"], "LapDistPct"].values * 100
-        abs_y = df.loc[df["ABSActive"], "Speed"].values
-        fig.add_trace(go.Scatter(x=abs_x, y=abs_y, mode="markers",
-            name="ABS aktiv", marker=dict(color=C_YELLOW, size=4)), row=1, col=1)
-
+        ax = df.loc[df["ABSActive"], "LapDistPct"].values * 100
+        ay = df.loc[df["ABSActive"], "Speed"].values
+        fig.add_trace(go.Scatter(x=ax, y=ay, mode="markers", name="ABS aktiv",
+            marker=dict(color=C_YELLOW, size=4)), row=1, col=1)
     fig.add_trace(go.Scatter(x=x, y=df["ThrottlePct"], name="Gas",
         line=dict(color=C_THROTTLE, width=1.3),
         fill="tozeroy", fillcolor="rgba(0,196,140,0.12)"), row=2, col=1)
     fig.add_trace(go.Scatter(x=x, y=df["BrakePct"], name="Bremse",
         line=dict(color=C_BRAKE, width=1.3),
         fill="tozeroy", fillcolor="rgba(255,59,59,0.12)"), row=2, col=1)
-
     fig.add_trace(go.Scatter(x=x, y=df["Gear"], name="Gear",
         line=dict(color=C_ORANGE, width=1.5)), row=3, col=1)
-
     fig.add_trace(go.Scatter(x=x, y=df["LongAccel"], name="Long-G",
         line=dict(color=C_PURPLE, width=1)), row=4, col=1)
     fig.add_trace(go.Scatter(x=x, y=df["LatAccel"], name="Lat-G",
         line=dict(color=C_YELLOW, width=1)), row=4, col=1)
     fig.add_hline(y=0, line_dash="dot", line_color="#444", row=4, col=1)
-
     layout = dict(**LAYOUT_BASE)
-    layout["title"]  = dict(text=title, font=dict(color=C_ORANGE, size=14))
+    layout["title"]  = dict(text=title, font=dict(color=C_ORANGE, size=13))
     layout["height"] = 700
-    fig.update_layout(**layout)
     for r in range(1, 5):
         fig.update_xaxes(gridcolor="#1e1e1e", zerolinecolor="#333", row=r, col=1)
         fig.update_yaxes(gridcolor="#1e1e1e", zerolinecolor="#333", row=r, col=1)
     fig.update_xaxes(title_text="Rundeposition (%)", row=4, col=1)
+    fig.update_layout(**layout)
     return fig
 
 
 def compare_chart(dfa: pd.DataFrame, dfb: pd.DataFrame,
                   la: str, lb: str) -> go.Figure:
-    ra = resample_to(dfa)
-    rb = resample_to(dfb)
+    ra = resample_to(dfa);  rb = resample_to(dfb)
     x  = ra["LapDistPct"].values * 100
-
     fig = make_subplots(
         rows=3, cols=1, shared_xaxes=True,
-        row_heights=[0.45, 0.30, 0.25],
-        vertical_spacing=0.04,
+        row_heights=[0.45, 0.30, 0.25], vertical_spacing=0.04,
         subplot_titles=[
-            "Speed overlay (km/h)",
-            "Throttle & Brake (%)",
-            f"Δ Speed: {lb} − {la}  (positivt = {lb} hurtigere)",
+            "Speed overlay (km/h)", "Throttle & Brake (%)",
+            f"Δ Speed: {lb} − {la}  (grøn = {lb} hurtigere)",
         ],
     )
     fig.add_trace(go.Scatter(x=x, y=ra["Speed"], name=f"Speed — {la}",
         line=dict(color=C_SPEED, width=1.5)), row=1, col=1)
     fig.add_trace(go.Scatter(x=x, y=rb["Speed"], name=f"Speed — {lb}",
         line=dict(color=C_ORANGE, width=1.5, dash="dash")), row=1, col=1)
-
     fig.add_trace(go.Scatter(x=x, y=ra["ThrottlePct"], name=f"Gas — {la}",
         line=dict(color=C_THROTTLE, width=1.2)), row=2, col=1)
     fig.add_trace(go.Scatter(x=x, y=rb["ThrottlePct"], name=f"Gas — {lb}",
@@ -235,24 +358,24 @@ def compare_chart(dfa: pd.DataFrame, dfb: pd.DataFrame,
         line=dict(color=C_BRAKE, width=1.2)), row=2, col=1)
     fig.add_trace(go.Scatter(x=x, y=rb["BrakePct"], name=f"Bremse — {lb}",
         line=dict(color=C_BRAKE, width=1.2, dash="dash")), row=2, col=1)
-
     delta  = rb["Speed"].values - ra["Speed"].values
     colors = [C_GREEN if d >= 0 else C_BRAKE for d in delta]
     fig.add_trace(go.Bar(x=x, y=delta, name="Δ Speed",
         marker_color=colors, marker_line_width=0), row=3, col=1)
     fig.add_hline(y=0, line_color="#444", row=3, col=1)
-
-    layout = dict(**LAYOUT_BASE)
-    layout["height"] = 750
-    fig.update_layout(**layout)
+    layout = dict(**LAYOUT_BASE);  layout["height"] = 750
     for r in range(1, 4):
         fig.update_xaxes(gridcolor="#1e1e1e", zerolinecolor="#333", row=r, col=1)
         fig.update_yaxes(gridcolor="#1e1e1e", zerolinecolor="#333", row=r, col=1)
     fig.update_xaxes(title_text="Rundeposition (%)", row=3, col=1)
+    fig.update_layout(**layout)
     return fig
 
-# ── Claude ────────────────────────────────────────────────────────────────────
-def call_gemini(system: str, user: str) -> str:
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  GEMINI
+# ═════════════════════════════════════════════════════════════════════════════
+def call_ai(system: str, user: str) -> str:
     try:
         key = st.secrets["GEMINI_API_KEY"]
     except KeyError:
@@ -263,46 +386,46 @@ def call_gemini(system: str, user: str) -> str:
         model_name="gemini-3.1-flash-lite",
         system_instruction=system,
     )
-    resp = model.generate_content(user)
-    return resp.text
+    return model.generate_content(user).text
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  SIDEBAR
+# ═════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
     st.markdown("## 🏎️ Garage 61")
-    st.markdown("---")
-    st.subheader("🌤️ Baneforhold")
-    sky       = st.selectbox("Sky", ["Clear skies","Partly cloudy","Mostly cloudy","Overcast"])
-    ca, cb    = st.columns(2)
-    t_temp    = ca.number_input("Bane (°C)", value=38.3, step=0.1)
-    a_temp    = cb.number_input("Luft (°C)", value=21.0, step=0.1)
-    cw, cd    = st.columns([2,1])
-    w_spd     = cw.number_input("Vind (km/h)", value=4)
-    w_dir     = cd.selectbox("Dir", ["N","NE","E","SE","S","SW","W","NW"])
-    humidity  = st.slider("Fugt (%)", 0, 100, 82)
-    precip    = st.slider("Regn (%)", 0, 100, 0)
-    t_state   = st.selectbox("Bane-state",
-        ["Clean","Low usage","Moderately low usage","Moderate","Heavy","Greasy"], index=2)
-    fuel      = st.number_input("Brændstof (L)", value=40.9, step=0.1)
-    cond_str  = (f"Sky: {sky}, Bane: {t_temp}°C, Luft: {a_temp}°C, "
-                 f"Vind: {w_spd} km/h {w_dir}, Fugt: {humidity}%, "
-                 f"Regn: {precip}%, Bane-state: {t_state}, Brændstof: {fuel}L")
-
     st.markdown("---")
     st.subheader("⚙️ Coaching")
     skill = st.selectbox("Niveau", list(LEVEL.keys()))
     focus = st.selectbox("Fokus",  list(FOCUS.keys()))
     car   = st.selectbox("Bil", [
-        "Porsche 911 Cup (992.2)","Porsche 911 GT3 R (992)",
-        "GT3 Class","F4","LMP2","GTP","Andet"])
-    track = st.text_input("Bane", placeholder="f.eks. Le Mans, Navarra…")
+        "Porsche 911 Cup (992.2)", "Porsche 911 GT3 R (992)",
+        "GT3 Class", "F4", "LMP2", "GTP", "Andet"])
+    track = st.text_input("Bane", placeholder="f.eks. Navarra, Le Mans…")
     st.markdown("---")
-    st.caption(f"© {datetime.date.today().year} Garage 61 · Claude-powered")
+    st.subheader("🌤️ Baneforhold")
+    sky    = st.selectbox("Sky", ["Clear skies","Partly cloudy","Mostly cloudy","Overcast"])
+    ca, cb = st.columns(2)
+    t_temp = ca.number_input("Bane (°C)", value=38.0, step=0.1)
+    a_temp = cb.number_input("Luft (°C)", value=21.0, step=0.1)
+    cw, cd = st.columns([2,1])
+    w_spd  = cw.number_input("Vind (km/h)", value=4)
+    w_dir  = cd.selectbox("Dir", ["N","NE","E","SE","S","SW","W","NW"])
+    hum    = st.slider("Fugt (%)", 0, 100, 50)
+    cond_str = (f"Sky: {sky}, Bane: {t_temp}°C, Luft: {a_temp}°C, "
+                f"Vind: {w_spd} km/h {w_dir}, Fugt: {hum}%")
+    st.markdown("---")
+    st.caption(f"© {datetime.date.today().year} Garage 61 · Gemini-powered")
 
-# ── Session state ─────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+#  SESSION STATE
+# ═════════════════════════════════════════════════════════════════════════════
 if "log" not in st.session_state:
     st.session_state.log = []
 
-# ── Header ────────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+#  HEADER
+# ═════════════════════════════════════════════════════════════════════════════
 st.markdown("# 🏎️ Garage 61 · Telemetry Coach")
 st.markdown(
     f"<div class='card'>Bil: <b>{car}</b> &nbsp;·&nbsp; "
@@ -310,37 +433,153 @@ st.markdown(
     f"Niveau: <b>{skill}</b> &nbsp;·&nbsp; Fokus: <b>{focus}</b></div>",
     unsafe_allow_html=True)
 
-t1, t2, t3, t4 = st.tabs([
-    "🏁 Enkelt omgang", "🔀 Sammenlign omgange", "📖 Lær telemetri", "📋 Session log"
+# ═════════════════════════════════════════════════════════════════════════════
+#  TABS
+# ═════════════════════════════════════════════════════════════════════════════
+t_sess, t_single, t_cmp, t_learn, t_log = st.tabs([
+    "📋 Session overview",
+    "🏁 Enkelt omgang",
+    "🔀 Sammenlign omgange",
+    "📖 Lær telemetri",
+    "📋 Session log",
 ])
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  TAB 1 · SINGLE LAP
-# ══════════════════════════════════════════════════════════════════════════════
-with t1:
-    up = st.file_uploader("Upload CSV fra Garage 61 (én omgang)", type=["csv"], key="t1")
-    if up:
+# ─────────────────────────────────────────────────────────────────────────────
+#  TAB: SESSION OVERVIEW
+# ─────────────────────────────────────────────────────────────────────────────
+with t_sess:
+    xlsx_up = st.file_uploader(
+        "Upload XLSX-session fra Garage 61 (indeholder Practice, Kval og/eller Race)",
+        type=["xlsx"], key="sess_xlsx")
+
+    if xlsx_up:
+        with st.spinner("Indlæser session…"):
+            sessions = load_session_xlsx(xlsx_up.read())
+
+        if not sessions:
+            st.error("Ingen kendte session-sheets fundet i filen.")
+        else:
+            # Create inner tabs for each available session
+            inner_labels = [SESSION_LABELS[s] for s in SESSION_SHEETS if s in sessions]
+            inner_keys   = [s for s in SESSION_SHEETS if s in sessions]
+            inner_tabs   = st.tabs(inner_labels)
+
+            for tab, key in zip(inner_tabs, inner_keys):
+                with tab:
+                    df     = sessions[key]
+                    colour = SESSION_COLOURS[key]
+                    clean  = df[df["Clean"] == 1]
+                    sec_cols = [c for c in df.columns
+                                if c.startswith("Sector ") and not c.endswith("_sec")]
+                    driver = df["Driver"].iloc[0] if "Driver" in df.columns else "—"
+
+                    # ── Metrics row ───────────────────────────────────────────
+                    st.markdown(f"#### {SESSION_LABELS[key]} — {driver}")
+                    c1, c2, c3, c4 = st.columns(4)
+                    best_s = clean["LapSec"].min() if not clean.empty else None
+                    c1.metric("Bedste omgang",    fmt_s(best_s) if best_s else "—")
+                    c2.metric("Rene omgange",     f"{len(clean)} / {len(df)}")
+                    std_s = clean["LapSec"].std() if len(clean) > 1 else None
+                    c3.metric("Konsistens (std)", f"{std_s:.3f}s" if std_s else "—")
+                    fuel = df["Fuel used"].sum() if "Fuel used" in df.columns else 0
+                    c4.metric("Brændstof brugt",  f"{fuel:.2f} L")
+
+                    # ── Charts ────────────────────────────────────────────────
+                    ch1, ch2 = st.columns([3, 2], gap="medium")
+                    with ch1:
+                        st.plotly_chart(lap_time_chart(df, SESSION_LABELS[key], colour),
+                                        use_container_width=True)
+                    with ch2:
+                        sfig = sector_chart(df, sec_cols, colour)
+                        if sfig:
+                            st.plotly_chart(sfig, use_container_width=True)
+                        else:
+                            st.info("Ingen sektortider tilgængelige.")
+
+                    # ── Lap table ─────────────────────────────────────────────
+                    with st.expander("📄 Lap-tabel"):
+                        show_cols = (["LapIndex","LapStr","Clean"]
+                                     + [c + "_sec" for c in sec_cols if c + "_sec" in df.columns]
+                                     + (["Fuel used"] if "Fuel used" in df.columns else []))
+                        tbl = df[show_cols].copy()
+                        tbl.columns = (["#","Laptid","Ren"]
+                                       + [c.replace("Sector ","S").replace("_sec","") for c in sec_cols]
+                                       + (["Fuel brugt (L)"] if "Fuel used" in df.columns else []))
+                        # Format sector seconds
+                        for c in tbl.columns:
+                            if c.startswith("S") and c[1:].isdigit():
+                                tbl[c] = tbl[c].apply(fmt_s)
+                        st.dataframe(tbl, use_container_width=True, hide_index=True)
+
+                    # ── AI coaching ───────────────────────────────────────────
+                    st.markdown("#### 🤖 AI Session-analyse")
+                    if st.button(f"Analysér {SESSION_LABELS[key]} med AI",
+                                 key=f"btn_sess_{key}"):
+                        sys_p = f"""Du er en erfaren iRacing race engineer og driver coach fra Garage 61.
+Du modtager session-nøgletal (laptider, sektortider, brændstof) og skal give konkret feedback.
+
+NIVEAU: {LEVEL[skill]}
+FOKUS: {FOCUS[focus]}
+
+Svar ALTID på dansk. Strukturér svaret præcis sådan:
+
+## 📊 Sessionsbillede
+[Overordnet vurdering af sessionen — tempo, konsistens, progression]
+
+## ✅ Det går godt
+[1-2 konkrete styrker]
+
+## ⚠️ Her er tid at hente
+[2-3 konkrete svagheder med forklaring]
+
+## 🎯 Fokuspunkter til næste session
+[3 nummererede, konkrete øvelser]
+"""
+                        user_msg = (
+                            f"Bil: {car}\nBane: {track or 'ukendt'}\nForhold: {cond_str}\n\n"
+                            + session_summary_text(df, SESSION_LABELS[key], sec_cols)
+                        )
+                        with st.spinner("Analyserer…"):
+                            result = call_ai(sys_p, user_msg)
+                        st.session_state.log.append({
+                            "time": datetime.datetime.now().strftime("%H:%M"),
+                            "type": f"Session: {SESSION_LABELS[key]}",
+                            "track": track or "—",
+                            "content": result,
+                        })
+                        st.markdown(result)
+    else:
+        st.markdown(
+            "<div class='card'>Upload en XLSX-fil eksporteret fra Garage 61. "
+            "Filen kan indeholde Practice, Kval og/eller Race — alle sessions vises automatisk.</div>",
+            unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  TAB: ENKELT OMGANG
+# ─────────────────────────────────────────────────────────────────────────────
+with t_single:
+    csv_up = st.file_uploader(
+        "Upload CSV fra Garage 61 (én omgang)", type=["csv"], key="t1_csv")
+    if csv_up:
         with st.spinner("Indlæser data…"):
-            df = load_csv(up.read())
-        m = compute_metrics(df)
+            df = load_lap_csv(csv_up.read())
+        m = compute_lap_metrics(df)
 
         st.markdown("### 📊 Nøgletal")
         c1,c2,c3,c4,c5,c6 = st.columns(6)
-        c1.metric("Tophastighed",        f"{m['speed_max']} km/h")
-        c2.metric("Fuld gas",            f"{m['throttle_full_pct']}%",
-                  help="Andel af runden hvor throttle > 95%")
-        c3.metric("Bremse aktiv",        f"{m['brake_active_pct']}%")
-        c4.metric("Max bremsetryk",      f"{m['brake_max']}%")
-        c5.metric("ABS-indgreb",         str(m['abs_interventions']))
-        c6.metric("Gas+bremse overlap",  f"{m['overlap_pct']}%",
-                  help="Andel af runden med begge pedaler aktive")
+        c1.metric("Tophastighed",       f"{m['speed_max']} km/h")
+        c2.metric("Fuld gas",           f"{m['throttle_full_pct']}%")
+        c3.metric("Bremse aktiv",       f"{m['brake_active_pct']}%")
+        c4.metric("Max bremsetryk",     f"{m['brake_max']}%")
+        c5.metric("ABS-indgreb",        str(m['abs_interventions']))
+        c6.metric("Gas+bremse overlap", f"{m['overlap_pct']}%")
 
         st.markdown("### 📈 Telemetri-trace")
-        st.plotly_chart(main_chart(df, f"{car} · {track or 'ukendt bane'}"),
+        st.plotly_chart(lap_chart(df, f"{car} · {track or 'ukendt bane'}"),
                         use_container_width=True)
 
         st.markdown("### 🤖 AI Coaching")
-        if st.button("🚀 Analysér med AI", key="btn1"):
+        if st.button("🚀 Analysér med AI", key="btn_single"):
             sys_p = f"""Du er en erfaren iRacing race engineer og driver coach fra Garage 61.
 Du modtager præcise telemetri-nøgletal beregnet direkte fra CSV-data.
 
@@ -353,53 +592,55 @@ Svar ALTID på dansk. Strukturér svaret præcis sådan:
 [Fortolk nøgletallene — hvad ser vi samlet set?]
 
 ## ✅ Det går godt
-[1-2 konkrete styrker baseret på tallene]
+[1-2 konkrete styrker]
 
 ## ⚠️ Her er tid at hente
 [2-3 konkrete svagheder med forklaring af HVORFOR det koster tid]
 
 ## 🎯 Øvelser til næste stint
-[3 nummererede, meget konkrete øvelser — hvad skal man gøre anderledes og præcis HVORDAN]
+[3 nummererede, meget konkrete øvelser]
 """
-            user_msg = f"Bil: {car}\nBane: {track or 'ukendt'}\nForhold: {cond_str}\n\n{metrics_text(m)}"
+            user_msg = (f"Bil: {car}\nBane: {track or 'ukendt'}\nForhold: {cond_str}\n\n"
+                        + lap_metrics_text(m))
             with st.spinner("Coachen analyserer…"):
-                result = call_gemini(sys_p, user_msg)
+                result = call_ai(sys_p, user_msg)
             st.session_state.log.append({
                 "time": datetime.datetime.now().strftime("%H:%M"),
                 "type": "Enkelt omgang", "track": track or "—", "content": result,
             })
             st.markdown(result)
     else:
-        st.markdown("<div class='card'>Upload en CSV-fil eksporteret direkte fra Garage 61.</div>",
+        st.markdown("<div class='card'>Upload en CSV-fil eksporteret fra Garage 61.</div>",
                     unsafe_allow_html=True)
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  TAB 2 · LAP COMPARISON
-# ══════════════════════════════════════════════════════════════════════════════
-with t2:
-    st.markdown("Upload to CSV-filer for at sammenligne speed, pedaler og delta direkte.")
+# ─────────────────────────────────────────────────────────────────────────────
+#  TAB: SAMMENLIGN OMGANGE
+# ─────────────────────────────────────────────────────────────────────────────
+with t_cmp:
+    st.markdown("Upload to CSV-filer for at sammenligne speed, pedaler og delta.")
     ca2, cb2 = st.columns(2, gap="large")
     with ca2:
-        st.markdown("#### 🔵 Omgang A — dit lap")
-        fa   = st.file_uploader("CSV — lap A", type=["csv"], key="t2a")
-        la   = st.text_input("Navn", value="Mit lap", key="la")
+        st.markdown("#### 🔵 Omgang A")
+        fa = st.file_uploader("CSV — lap A", type=["csv"], key="t2a")
+        la = st.text_input("Navn", value="Mit lap", key="la")
     with cb2:
         st.markdown("#### 🟠 Omgang B — reference")
-        fb   = st.file_uploader("CSV — lap B", type=["csv"], key="t2b")
-        lb   = st.text_input("Navn", value="Reference", key="lb")
+        fb = st.file_uploader("CSV — lap B", type=["csv"], key="t2b")
+        lb = st.text_input("Navn", value="Reference", key="lb")
 
     if fa and fb:
         with st.spinner("Indlæser begge laps…"):
-            dfa = load_csv(fa.read())
-            dfb = load_csv(fb.read())
-        ma = compute_metrics(dfa)
-        mb = compute_metrics(dfb)
+            dfa = load_lap_csv(fa.read())
+            dfb = load_lap_csv(fb.read())
+        ma = compute_lap_metrics(dfa)
+        mb = compute_lap_metrics(dfb)
 
         st.markdown("### 📊 Sammenligning")
         c1,c2,c3,c4 = st.columns(4)
-        def d(a, b): s = round(b-a, 1); return f"{'+' if s>0 else ''}{s}"
+        def d(a, b): s = round(b-a,1); return f"{'+' if s>0 else ''}{s}"
         c1.metric("Tophastighed",
-                  f"{ma['speed_max']} / {mb['speed_max']} km/h", d(ma['speed_max'], mb['speed_max']))
+                  f"{ma['speed_max']} / {mb['speed_max']} km/h",
+                  d(ma['speed_max'], mb['speed_max']))
         c2.metric("Min. svinghastighed",
                   f"{ma['corner_speed_min']} / {mb['corner_speed_min']} km/h",
                   d(ma['corner_speed_min'], mb['corner_speed_min']))
@@ -414,7 +655,7 @@ with t2:
         st.plotly_chart(compare_chart(dfa, dfb, la, lb), use_container_width=True)
 
         st.markdown("### 🤖 AI Delta-analyse")
-        if st.button("🔀 Analysér forskel med AI", key="btn2"):
+        if st.button("🔀 Analysér forskel med AI", key="btn_cmp"):
             sys_p = f"""Du er en erfaren iRacing race engineer og driver coach fra Garage 61.
 Du modtager nøgletal fra TO omgange og skal forklare præcis hvad der er anderledes.
 
@@ -434,21 +675,22 @@ Svar ALTID på dansk. Strukturér svaret præcis sådan:
 """
             user_msg = (
                 f"Bil: {car}\nBane: {track or 'ukendt'}\nForhold: {cond_str}\n\n"
-                + metrics_text(ma, f"({la})") + "\n\n"
-                + metrics_text(mb, f"({lb})")
+                + lap_metrics_text(ma, f"({la})") + "\n\n"
+                + lap_metrics_text(mb, f"({lb})")
             )
             with st.spinner("Sammenligner…"):
-                result = call_gemini(sys_p, user_msg)
+                result = call_ai(sys_p, user_msg)
             st.session_state.log.append({
                 "time": datetime.datetime.now().strftime("%H:%M"),
-                "type": f"Sammenligning: {la} vs {lb}", "track": track or "—", "content": result,
+                "type": f"Sammenligning: {la} vs {lb}",
+                "track": track or "—", "content": result,
             })
             st.markdown(result)
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  TAB 3 · LEARN
-# ══════════════════════════════════════════════════════════════════════════════
-with t3:
+# ─────────────────────────────────────────────────────────────────────────────
+#  TAB: LÆR TELEMETRI
+# ─────────────────────────────────────────────────────────────────────────────
+with t_learn:
     st.markdown("### 📖 Hvad betyder telemetrien?")
     for title, text in [
         ("🔵 Speed (km/h)",
@@ -468,28 +710,29 @@ with t3:
          "For lavt gear = for mange omdrejninger, for højt = for lidt træk ud af svingen."),
         ("🟣 LongAccel (longitudinal G)",
          "Accelerations-kraft frem og tilbage. Negative værdier = du bremser. "
-         "Jo mere negativ, jo hårdere bremser du. Den blødeste overgang fra negativ til positiv "
-         "= det bedste trail-braking-punkt."),
+         "Den blødeste overgang fra negativ til positiv = det bedste trail-braking-punkt."),
         ("🟡 LatAccel (lateral G)",
-         "Sidelæns G-kraft — hvor meget bilen skubbes i svingen. "
-         "Høj lateral G = god kurveudnyttelse. Hvis den falder mens du giver gas, "
-         "understeer du typisk ud af svingen."),
+         "Sidelæns G-kraft. Høj lateral G = god kurveudnyttelse. "
+         "Hvis den falder mens du giver gas, understeer du typisk ud af svingen."),
         ("🔶 ABSActive",
-         "Sand/falsk — om ABS-systemet aktiverede. Mange ABS-indgreb tyder på for sent "
-         "eller for hårdt indbremset. Målet er at være tæt på grænsen uden at ramme den."),
+         "Sand/falsk — om ABS aktiverede. Mange indgreb tyder på for sent eller for hårdt "
+         "indbremset. Målet er at ligge tæt på grænsen uden at ramme den."),
         ("⚙️ Gas+bremse overlap",
-         "Andelen af tid hvor begge pedaler er aktive. Et lille overlap er intentionelt "
-         "(trail-braking i indgangen), men for meget overlap koster bremse-effektivitet "
-         "og er ofte et tegn på panik eller usikkerhed."),
+         "Andelen af tid hvor begge pedaler er aktive samtidigt. Et lille overlap er intentionelt "
+         "(trail-braking i indgangen), men for meget overlap koster bremse-effektivitet."),
+        ("📋 Session XLSX — Sektor-tider",
+         "Garage 61 opdeler runden i sektorer. Sektortider er nøglen til at finde præcist "
+         "HVOR på banen du taber tid — ikke bare om du er hurtig eller langsom samlet set. "
+         "Sammenlign dine sektor-snit med dit bedste sektortid for at se konsistensproblemet."),
     ]:
         st.markdown(
             f"<div class='learn-card'><h4>{title}</h4><p>{text}</p></div>",
             unsafe_allow_html=True)
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  TAB 4 · SESSION LOG
-# ══════════════════════════════════════════════════════════════════════════════
-with t4:
+# ─────────────────────────────────────────────────────────────────────────────
+#  TAB: SESSION LOG
+# ─────────────────────────────────────────────────────────────────────────────
+with t_log:
     if not st.session_state.log:
         st.info("Ingen analyser endnu — kør en analyse i de andre faner.")
     else:
