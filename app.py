@@ -5,7 +5,7 @@ CSV format: Speed, LapDistPct, Brake, Throttle, RPM,
 """
 
 import streamlit as st
-import anthropic
+from google import genai
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -252,19 +252,19 @@ def compare_chart(dfa: pd.DataFrame, dfb: pd.DataFrame,
     return fig
 
 # ── Claude ────────────────────────────────────────────────────────────────────
-def call_claude(system: str, user: str) -> str:
+def call_gemini(system: str, user: str) -> str:
     try:
-        key = st.secrets["ANTHROPIC_API_KEY"]
+        key = st.secrets["GEMINI_API_KEY"]
     except KeyError:
-        st.error("❌ Mangler 'ANTHROPIC_API_KEY' i Streamlit Secrets!")
+        st.error("❌ Mangler 'GEMINI_API_KEY' i Streamlit Secrets!")
         st.stop()
-    client = anthropic.Anthropic(api_key=key)
-    resp   = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=1800, system=system,
-        messages=[{"role": "user", "content": user}],
+    client = genai.Client(api_key=key)
+    resp   = client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=user,
+        config=genai.types.GenerateContentConfig(system_instruction=system),
     )
-    return resp.content[0].text
+    return resp.text
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -363,7 +363,7 @@ Svar ALTID på dansk. Strukturér svaret præcis sådan:
 """
             user_msg = f"Bil: {car}\nBane: {track or 'ukendt'}\nForhold: {cond_str}\n\n{metrics_text(m)}"
             with st.spinner("Coachen analyserer…"):
-                result = call_claude(sys_p, user_msg)
+                result = call_gemini(sys_p, user_msg)
             st.session_state.log.append({
                 "time": datetime.datetime.now().strftime("%H:%M"),
                 "type": "Enkelt omgang", "track": track or "—", "content": result,
@@ -438,7 +438,7 @@ Svar ALTID på dansk. Strukturér svaret præcis sådan:
                 + metrics_text(mb, f"({lb})")
             )
             with st.spinner("Sammenligner…"):
-                result = call_claude(sys_p, user_msg)
+                result = call_gemini(sys_p, user_msg)
             st.session_state.log.append({
                 "time": datetime.datetime.now().strftime("%H:%M"),
                 "type": f"Sammenligning: {la} vs {lb}", "track": track or "—", "content": result,
