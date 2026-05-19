@@ -5,7 +5,7 @@ CSV format: Speed, LapDistPct, Brake, Throttle, RPM,
 """
 
 import streamlit as st
-from google import genai
+import google.generativeai as genai
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -258,12 +258,12 @@ def call_gemini(system: str, user: str) -> str:
     except KeyError:
         st.error("❌ Mangler 'GEMINI_API_KEY' i Streamlit Secrets!")
         st.stop()
-    client = genai.Client(api_key=key)
-    resp   = client.models.generate_content(
-        model="gemini-2.0-flash",
-        contents=user,
-        config=genai.types.GenerateContentConfig(system_instruction=system),
+    genai.configure(api_key=key)
+    model = genai.GenerativeModel(
+        model_name="gemini-3.1-flash-lite",
+        system_instruction=system,
     )
+    resp = model.generate_content(user)
     return resp.text
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
