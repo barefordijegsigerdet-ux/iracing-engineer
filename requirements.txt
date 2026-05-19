@@ -1,4 +1,5 @@
 streamlit
-google-generativeai
-Pillow
-streamlit-paste-button
+anthropic
+pandas
+numpy
+plotly
