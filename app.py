@@ -111,24 +111,65 @@ def fmt_s(s) -> str:
         return "—"
 
 
+COMPASS = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"]
+
+def _wind_compass(rad: float) -> str:
+    deg = float(rad) * 180 / np.pi
+    return COMPASS[int((deg + 11.25) / 22.5) % 16]
+
+
+def _overview_val(ov: pd.DataFrame, label: str) -> str:
+    """Find a value in the Overview sheet (label in col 2, value in col 3 one row below)."""
+    for i in range(len(ov) - 1):
+        if str(ov.iloc[i, 2]).strip() == label:
+            v = ov.iloc[i + 1, 3]
+            return str(v).strip() if pd.notna(v) else ""
+    return ""
+
+
 @st.cache_data(show_spinner=False)
-def load_session_xlsx(data: bytes) -> dict[str, pd.DataFrame]:
-    """Load all session sheets from a Garage 61 XLSX export."""
-    all_sheets = pd.read_excel(io.BytesIO(data), sheet_name=None)
+def load_session_xlsx(data: bytes) -> tuple[dict[str, pd.DataFrame], dict]:
+    """Load all session sheets + metadata from a Garage 61 XLSX export."""
+    all_sheets = pd.read_excel(io.BytesIO(data), sheet_name=None, header=None)
+    # ── Overview metadata ─────────────────────────────────────────────────────
+    ov   = all_sheets.get("Overview", pd.DataFrame())
+    meta = {
+        "car":    _overview_val(ov, "Car"),
+        "track":  _overview_val(ov, "Track"),
+        "driver": _overview_val(ov, "Driver"),
+        "date":   _overview_val(ov, "Session date"),
+    }
+    # ── Session sheets ────────────────────────────────────────────────────────
+    # Re-read with headers for session sheets
+    all_sheets_hdr = pd.read_excel(io.BytesIO(data), sheet_name=None)
     result = {}
+    cond   = {}
     for sheet in SESSION_SHEETS:
-        if sheet not in all_sheets:
+        if sheet not in all_sheets_hdr:
             continue
-        df = all_sheets[sheet].copy()
+        df = all_sheets_hdr[sheet].copy()
         df["LapSec"] = td_to_s(df["Lap time"])
-        # Auto-detect sector columns
-        sec_cols = [c for c in df.columns if c.startswith("Sector ")]
+        sec_cols = [c for c in df.columns if c.startswith("Sector ") and not c.endswith("_sec")]
         for col in sec_cols:
             df[col + "_sec"] = td_to_s(df[col])
         df["LapIndex"] = range(1, len(df) + 1)
         df["LapStr"]   = df["LapSec"].apply(fmt_s)
         result[sheet]  = df
-    return result
+        # Extract conditions from first row of first session found
+        if not cond and len(df) > 0:
+            row = df.iloc[0]
+            cond = {
+                "track_temp": round(float(row.get("Track temp", 0)), 1),
+                "air_temp":   round(float(row.get("Air temperature", 0)), 1),
+                "humidity":   round(float(row.get("Relative humidity", 0)) * 100, 1),
+                "wind_kmh":   round(float(row.get("Wind velocity", 0)) * 3.6, 1),
+                "wind_dir":   _wind_compass(row.get("Wind direction", 0)),
+                "fog":        round(float(row.get("Fog level", 0)) * 100, 0),
+                "precip":     round(float(row.get("Precipitation", 0)) * 100, 0),
+                "track_wet":  round(float(row.get("Track Wetness", 0)) * 100, 0),
+            }
+    meta["conditions"] = cond
+    return result, meta
 
 
 def session_summary_text(df: pd.DataFrame, session_name: str, sec_cols: list) -> str:
@@ -454,12 +495,30 @@ with t_sess:
 
     if xlsx_up:
         with st.spinner("Indlæser session…"):
-            sessions = load_session_xlsx(xlsx_up.read())
+            sessions, meta = load_session_xlsx(xlsx_up.read())
 
         if not sessions:
             st.error("Ingen kendte session-sheets fundet i filen.")
         else:
-            # Create inner tabs for each available session
+            # ── Session metadata card ─────────────────────────────────────────
+            cond = meta.get("conditions", {})
+            cond_auto = (
+                f"Bane: {cond.get('track_temp','?')}°C, "
+                f"Luft: {cond.get('air_temp','?')}°C, "
+                f"Fugt: {cond.get('humidity','?')}%, "
+                f"Vind: {cond.get('wind_kmh','?')} km/h {cond.get('wind_dir','?')}, "
+                f"Regn: {cond.get('precip','?')}%, "
+                f"Bane-våd: {cond.get('track_wet','?')}%"
+            )
+            st.markdown(
+                f"<div class='card'>"
+                f"🏎️ <b>{meta.get('car','—')}</b> &nbsp;·&nbsp; "
+                f"📍 <b>{meta.get('track','—')}</b> &nbsp;·&nbsp; "
+                f"👤 <b>{meta.get('driver','—')}</b><br>"
+                f"🌤️ {cond_auto}"
+                f"</div>", unsafe_allow_html=True)
+
+            # ── Create inner tabs ─────────────────────────────────────────────
             inner_labels = [SESSION_LABELS[s] for s in SESSION_SHEETS if s in sessions]
             inner_keys   = [s for s in SESSION_SHEETS if s in sessions]
             inner_tabs   = st.tabs(inner_labels)
@@ -471,7 +530,7 @@ with t_sess:
                     clean  = df[df["Clean"] == 1]
                     sec_cols = [c for c in df.columns
                                 if c.startswith("Sector ") and not c.endswith("_sec")]
-                    driver = df["Driver"].iloc[0] if "Driver" in df.columns else "—"
+                    driver = meta.get("driver") or (df["Driver"].iloc[0] if "Driver" in df.columns else "—")
 
                     # ── Metrics row ───────────────────────────────────────────
                     st.markdown(f"#### {SESSION_LABELS[key]} — {driver}")
@@ -535,8 +594,10 @@ Svar ALTID på dansk. Strukturér svaret præcis sådan:
 ## 🎯 Fokuspunkter til næste session
 [3 nummererede, konkrete øvelser]
 """
+                        auto_car   = meta.get("car")   or car
+                        auto_track = meta.get("track") or track or "ukendt"
                         user_msg = (
-                            f"Bil: {car}\nBane: {track or 'ukendt'}\nForhold: {cond_str}\n\n"
+                            f"Bil: {auto_car}\nBane: {auto_track}\nForhold: {cond_auto}\n\n"
                             + session_summary_text(df, SESSION_LABELS[key], sec_cols)
                         )
                         with st.spinner("Analyserer…"):
