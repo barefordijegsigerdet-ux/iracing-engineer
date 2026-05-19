@@ -488,11 +488,12 @@ st.markdown("---")
 # ═════════════════════════════════════════════════════════════════════════════
 #  TABS
 # ═════════════════════════════════════════════════════════════════════════════
-t_guide, t_sess, t_single, t_cmp, t_learn, t_log = st.tabs([
+t_guide, t_sess, t_single, t_cmp, t_setup, t_learn, t_log = st.tabs([
     "🚀 Kom i gang",
     "📋 Session overview",
     "🏁 Enkelt omgang",
     "🔀 Sammenlign omgange",
+    "🔧 Setup rådgiver",
     "📖 Lær telemetri",
     "📋 Session log",
 ])
@@ -814,6 +815,126 @@ Svar ALTID på dansk. Strukturér svaret præcis sådan:
                 "time": datetime.datetime.now().strftime("%H:%M"),
                 "type": f"Sammenligning: {la} vs {lb}",
                 "track": track or "—", "content": result,
+            })
+            st.markdown(result)
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  TAB: SETUP RÅDGIVER
+# ─────────────────────────────────────────────────────────────────────────────
+with t_setup:
+    st.markdown("### 🔧 Setup Rådgiver")
+    st.markdown(
+        "<div class='card'>Beskriv hvad bilen gør forkert, og AI-ingeniøren foreslår "
+        "konkrete setup-justeringer. Jo mere præcist du beskriver, jo bedre råd.</div>",
+        unsafe_allow_html=True)
+
+    su1, su2 = st.columns(2, gap="large")
+
+    with su1:
+        st.markdown("#### 🚗 Bil & session")
+        setup_car   = st.selectbox("Bil", [
+            "Porsche 911 Cup (992.2)", "Porsche 911 GT3 R (992)",
+            "GT3 Class", "F4", "LMP2", "GTP", "Andet"], key="setup_car")
+        setup_track = st.text_input("Bane", placeholder="f.eks. Navarra, Le Mans…", key="setup_track")
+        setup_session = st.selectbox("Session-type", [
+            "Practice", "Qualifying", "Race — start (fuld tank)",
+            "Race — slutning (tom tank)"], key="setup_sess")
+
+        st.markdown("#### 📍 Hvornår opstår problemet?")
+        corner_type = st.multiselect("Sving-type", [
+            "Langsomme sving (under 100 km/h)",
+            "Mellemhurtige sving (100–180 km/h)",
+            "Hurtige sving (over 180 km/h)",
+            "Bremse-zone",
+            "Indgang (turn-in)",
+            "Apex (midten af svingen)",
+            "Exit (ud af svingen)",
+            "Langstraek / motorvej",
+        ], key="setup_when")
+
+    with su2:
+        st.markdown("#### ⚠️ Hvad føles forkert?")
+        symptoms = st.multiselect("Vælg symptomer", [
+            "Understeer — bilen skubber ud foran (for meget)",
+            "Oversteer — bagende slipper (for meget)",
+            "Bilen er langsom til at dreje ind",
+            "Bilen er nervøs/ustabil ved høj fart",
+            "Bilen hopper/datter over bump",
+            "Bremserne låser for tidligt",
+            "ABS aktiverer for meget",
+            "Bilen dykker ned ved bremsning (for meget)",
+            "Understeer ved gasgivning ud af sving",
+            "Oversteer ved gasgivning ud af sving",
+            "For meget understyring i sving-midte",
+            "Dækkene overopheder (for meget greb i starten, tabes hurtigt)",
+            "Dækkene er aldrig varme nok",
+        ], key="setup_symptoms")
+
+        st.markdown("#### 💬 Beskriv med egne ord")
+        free_text = st.text_area(
+            "Hvad oplever du?",
+            placeholder="F.eks.: 'I sektor 1 på Navarra skubber bilen bredt ud i de to "
+                        "langsomme sving — jeg skal løfte gas for at dreje, "
+                        "og exit-hastigheden er elendig'",
+            height=130, key="setup_free")
+
+        st.markdown("#### 📎 Setup-fil (valgfrit)")
+        setup_file = st.file_uploader(
+            "Upload iRacing HTML setup-fil", type=["html","htm"], key="setup_html")
+        setup_content = ""
+        if setup_file:
+            raw = setup_file.read()
+            try:    setup_content = raw.decode("utf-8")
+            except: setup_content = raw.decode("iso-8859-1")
+            st.success("✅ Setup-fil indlæst")
+
+    st.markdown("---")
+    if st.button("🔧 Få setup-råd", key="btn_setup"):
+        if not symptoms and not free_text.strip():
+            st.warning("Beskriv mindst ét symptom eller skriv hvad du oplever.")
+        else:
+            sys_p = f"""Du er en erfaren iRacing race engineer specialiseret i setup-justeringer.
+Du modtager en beskrivelse af bilens adfærd og skal give konkrete, handlingsbare setup-råd.
+
+NIVEAU: {LEVEL[skill]}
+
+Svar ALTID på dansk. Vær KONKRET — angiv præcis hvilken parameter der justeres, hvilken retning og ca. hvor meget.
+
+Strukturér svaret præcis sådan:
+
+## 🔍 Diagnose
+[Forklar hvad der sandsynligvis forårsager symptomerne — kort og præcist]
+
+## 🔧 Anbefalede justeringer
+[For hver justering: parameter → retning → ca. mængde → hvorfor det hjælper]
+Brug dette format per justering:
+**[Parameter]:** [Retning og mængde] — [Kort forklaring]
+
+## ⚡ Prioritering
+[Hvilken justering har størst effekt? Start her.]
+
+## ⚠️ Pas på
+[Eventuelle trade-offs eller ting der kan gå galt med disse justeringer]
+"""
+            when_str = ", ".join(corner_type) if corner_type else "ikke specificeret"
+            sym_str  = "\n".join(f"- {s}" for s in symptoms) if symptoms else "Ikke valgt via liste"
+            user_msg = "\n".join([
+                f"Bil: {setup_car}",
+                f"Bane: {setup_track or 'ikke angivet'}",
+                f"Session: {setup_session}",
+                f"Problemet opstår: {when_str}",
+                "\nSymptomer:\n" + sym_str,
+                "\nFri beskrivelse: " + (free_text or "Ingen"),
+            ])
+            if setup_content:
+                user_msg += "\n\nSetup-fil (uddrag):\n" + setup_content[:3000]
+            with st.spinner("Ingeniøren beregner justeringer…"):
+                result = call_ai(sys_p, user_msg)
+            st.session_state.log.append({
+                "time":  datetime.datetime.now().strftime("%H:%M"),
+                "type":  f"Setup: {setup_car}",
+                "track": setup_track or "—",
+                "content": result,
             })
             st.markdown(result)
 
