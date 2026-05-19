@@ -379,18 +379,36 @@ def compare_chart(dfa: pd.DataFrame, dfb: pd.DataFrame,
                   la: str, lb: str) -> go.Figure:
     ra = resample_to(dfa);  rb = resample_to(dfb)
     x  = ra["LapDistPct"].values * 100
+
+    # Cumulative time delta: dt = d_dist / speed  (normalised — shape is exact, scale ~arbitrary)
+    # Positive = lb is ahead (gaining time), negative = la is ahead
+    d_dist   = np.diff(ra["LapDistPct"].values, prepend=ra["LapDistPct"].values[0])
+    d_dist   = np.where(d_dist <= 0, 1e-9, d_dist)
+    v_a      = np.where(ra["Speed"].values > 0, ra["Speed"].values, 1e-9)
+    v_b      = np.where(rb["Speed"].values > 0, rb["Speed"].values, 1e-9)
+    dt_a     = d_dist / v_a
+    dt_b     = d_dist / v_b
+    cum_delta = np.cumsum(dt_b - dt_a)
+    # Scale so y-axis is in seconds (approximate — assumes 1 km/h normalisation)
+    scale    = 3600.0
+    cum_delta_s = cum_delta * scale
+
     fig = make_subplots(
-        rows=3, cols=1, shared_xaxes=True,
-        row_heights=[0.45, 0.30, 0.25], vertical_spacing=0.04,
+        rows=4, cols=1, shared_xaxes=True,
+        row_heights=[0.35, 0.25, 0.20, 0.20], vertical_spacing=0.035,
         subplot_titles=[
-            "Speed overlay (km/h)", "Throttle & Brake (%)",
-            f"Δ Speed: {lb} − {la}  (grøn = {lb} hurtigere)",
+            "Speed overlay (km/h)",
+            "Throttle & Brake (%)",
+            f"Δ Speed: {lb} − {la}  (km/h)",
+            f"Kumulativ tidsdelta  (positiv = {lb} er foran)",
         ],
     )
+    # Speed overlay
     fig.add_trace(go.Scatter(x=x, y=ra["Speed"], name=f"Speed — {la}",
         line=dict(color=C_SPEED, width=1.5)), row=1, col=1)
     fig.add_trace(go.Scatter(x=x, y=rb["Speed"], name=f"Speed — {lb}",
         line=dict(color=C_ORANGE, width=1.5, dash="dash")), row=1, col=1)
+    # Pedals
     fig.add_trace(go.Scatter(x=x, y=ra["ThrottlePct"], name=f"Gas — {la}",
         line=dict(color=C_THROTTLE, width=1.2)), row=2, col=1)
     fig.add_trace(go.Scatter(x=x, y=rb["ThrottlePct"], name=f"Gas — {lb}",
@@ -399,16 +417,30 @@ def compare_chart(dfa: pd.DataFrame, dfb: pd.DataFrame,
         line=dict(color=C_BRAKE, width=1.2)), row=2, col=1)
     fig.add_trace(go.Scatter(x=x, y=rb["BrakePct"], name=f"Bremse — {lb}",
         line=dict(color=C_BRAKE, width=1.2, dash="dash")), row=2, col=1)
+    # Delta speed (bar)
     delta  = rb["Speed"].values - ra["Speed"].values
     colors = [C_GREEN if d >= 0 else C_BRAKE for d in delta]
     fig.add_trace(go.Bar(x=x, y=delta, name="Δ Speed",
         marker_color=colors, marker_line_width=0), row=3, col=1)
     fig.add_hline(y=0, line_color="#444", row=3, col=1)
-    layout = dict(**LAYOUT_BASE);  layout["height"] = 750
-    for r in range(1, 4):
+    # Cumulative delta time (line, filled)
+    fig.add_trace(go.Scatter(
+        x=x, y=cum_delta_s,
+        name="Kumulativ delta",
+        line=dict(color=C_YELLOW, width=2),
+        fill="tozeroy",
+        fillcolor=f"rgba(255,214,0,0.10)",
+        hovertemplate="%{y:.3f}s<extra></extra>",
+    ), row=4, col=1)
+    fig.add_hline(y=0, line_dash="dot", line_color="#555", row=4, col=1)
+
+    layout = dict(**LAYOUT_BASE)
+    layout["height"] = 900
+    for r in range(1, 5):
         fig.update_xaxes(gridcolor="#1e1e1e", zerolinecolor="#333", row=r, col=1)
         fig.update_yaxes(gridcolor="#1e1e1e", zerolinecolor="#333", row=r, col=1)
-    fig.update_xaxes(title_text="Rundeposition (%)", row=3, col=1)
+    fig.update_yaxes(title_text="s", row=4, col=1)
+    fig.update_xaxes(title_text="Rundeposition (%)", row=4, col=1)
     fig.update_layout(**layout)
     return fig
 
