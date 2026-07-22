@@ -13,6 +13,9 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import datetime, io
 
+from engine.setup_logic import list_classes, list_cars, params_as_text
+from engine.coaching_tips import get_track_data
+
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Garage 61 | Telemetry Coach",
@@ -874,9 +877,9 @@ with t_setup:
 
     with su1:
         st.markdown("#### 🚗 Bil & session")
-        setup_car   = st.selectbox("Bil", [
-            "Porsche 911 Cup (992.2)", "Porsche 911 GT3 R (992)",
-            "GT3 Class", "F4", "LMP2", "GTP", "Andet"], key="setup_car")
+        setup_class = st.selectbox("Bil-klasse", list_classes(), key="setup_class")
+        cars_in_class = list_cars(setup_class)
+        setup_car   = st.selectbox("Bil", cars_in_class or ["Andet"], key="setup_car")
         setup_track = st.text_input("Bane", placeholder="f.eks. Navarra, Le Mans…", key="setup_track")
         setup_session = st.selectbox("Session-type", [
             "Practice", "Qualifying", "Race — start (fuld tank)",
@@ -976,6 +979,11 @@ Hvis der er telemetri-tal med i beskeden, SKAL diagnosen tage udgangspunkt i de 
 frem for kun de afkrydsede symptomer — de afkrydsede/auto-fundne symptomer er et udgangspunkt,
 tallene er beviset. Nævn konkrete tal fra telemetrien i diagnosen, hvor det er relevant.
 
+Hvis der er "Reference-intervaller" for bilen med i beskeden: brug dem til at holde dine
+justeringsforslag inden for realistiske grænser for netop den bil/klasse, og angiv forslag som
+konkrete tal inden for intervallet. Gør det klart at intervallerne er vejledende referenceværdier,
+ikke eksakte spil-grænser — brugeren skal altid bekræfte i garagen i spillet.
+
 Strukturér svaret præcis sådan:
 
 ## 🔍 Diagnose
@@ -1006,6 +1014,14 @@ Brug dette format per justering:
                 user_msg += "\n\nSetup-fil (uddrag):\n" + setup_content[:3000]
             if metrics_text:
                 user_msg += "\n\n" + metrics_text
+            car_ref = params_as_text(setup_class, setup_car)
+            if car_ref:
+                user_msg += "\n\n" + car_ref
+            if setup_track:
+                td = get_track_data(setup_track)
+                if td["notes"] and "Info" not in td["notes"]:
+                    note_lines = "\n".join(f"- {k}: {v}" for k, v in td["notes"].items())
+                    user_msg += f"\n\n=== Bane-noter for {setup_track} ===\n{note_lines}"
             with st.spinner("Ingeniøren beregner justeringer…"):
                 result = call_ai(sys_p, user_msg)
             st.session_state.log.append({
