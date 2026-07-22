@@ -336,6 +336,48 @@ def lap_metrics_text(m: dict, label: str = "") -> str:
     ])
 
 
+def lap_metrics_delta_text(m_own: dict, m_ref: dict, ref_label: str = "reference") -> str:
+    """Sammenligner egen omgang mod en referenceomgang (fx teammate) og
+    formulerer forskellene som tekst, så AI'en kan bruge dem som evidens
+    frem for at gætte ud fra selvrapporterede symptomer."""
+    lines = [f"=== Delta mod {ref_label} (positiv = du taber her) ==="]
+    pairs = [
+        ("corner_speed_mean", "Snit svinghastighed", "km/h"),
+        ("corner_speed_min",  "Min. svinghastighed", "km/h"),
+        ("throttle_full_pct", "Tid på fuld gas",      "%"),
+        ("throttle_mean",     "Snit gaspådrag",       "%"),
+        ("brake_mean_active", "Snit bremsetryk",      "%"),
+        ("brake_active_pct",  "Tid på bremsen",       "%"),
+        ("lat_g_max",         "Max lateral G",        "g"),
+    ]
+    for key, label, unit in pairs:
+        if key in m_own and key in m_ref and isinstance(m_own[key], (int, float)) and isinstance(m_ref[key], (int, float)):
+            d = round(m_ref[key] - m_own[key], 2)
+            retning = "mindre" if d > 0 else "mere"
+            lines.append(f"{label}: {abs(d)} {unit} {retning} end {ref_label} (dig: {m_own[key]}, {ref_label}: {m_ref[key]})")
+    return "\n".join(lines)
+
+
+def auto_detect_symptoms(m_own: dict, m_ref: dict | None = None) -> list[str]:
+    """Foreslår symptomer ud fra faktiske telemetri-tal i stedet for at
+    kræve manuel selvrapportering. Konservativ — flager kun tydelige signaler,
+    AI-prompten får altid de rå tal med, så modellen selv kan nuancere."""
+    found = []
+    if isinstance(m_own.get("abs_interventions"), int) and m_own["abs_interventions"] >= 5:
+        found.append("ABS aktiverer for meget")
+    if m_ref:
+        if isinstance(m_own.get("corner_speed_mean"), (int, float)) and isinstance(m_ref.get("corner_speed_mean"), (int, float)):
+            if m_ref["corner_speed_mean"] - m_own["corner_speed_mean"] > m_ref["corner_speed_mean"] * 0.03:
+                found.append("For meget understyring i sving-midte")
+        if isinstance(m_own.get("throttle_full_pct"), (int, float)) and isinstance(m_ref.get("throttle_full_pct"), (int, float)):
+            if m_ref["throttle_full_pct"] - m_own["throttle_full_pct"] > 5:
+                found.append("Understeer ved gasgivning ud af sving")
+        if isinstance(m_own.get("brake_mean_active"), (int, float)) and isinstance(m_ref.get("brake_mean_active"), (int, float)):
+            if m_own["brake_mean_active"] - m_ref["brake_mean_active"] > 8:
+                found.append("Bilen er langsom til at dreje ind")
+    return found
+
+
 def lap_chart(df: pd.DataFrame, title: str = "") -> go.Figure:
     x   = df["LapDistPct"].values * 100
     fig = make_subplots(
@@ -852,8 +894,38 @@ with t_setup:
             "Langstraek / motorvej",
         ], key="setup_when")
 
+    st.markdown("#### 📊 Telemetri (valgfrit, men gør rådet langt mere præcist)")
+    tel1, tel2 = st.columns(2)
+    with tel1:
+        own_lap_file = st.file_uploader(
+            "Din egen omgang (Lap CSV)", type=["csv"], key="setup_own_lap")
+    with tel2:
+        ref_lap_file = st.file_uploader(
+            "Referenceomgang, fx en teammate eller hurtigere sammenlignings-lap (valgfrit)",
+            type=["csv"], key="setup_ref_lap")
+
+    metrics_text = ""
+    auto_symptoms: list[str] = []
+    if own_lap_file:
+        try:
+            own_df = load_lap_csv(own_lap_file.read())
+            m_own  = compute_lap_metrics(own_df)
+            metrics_text = lap_metrics_text(m_own, "(din omgang)")
+            m_ref = None
+            if ref_lap_file:
+                ref_df = load_lap_csv(ref_lap_file.read())
+                m_ref  = compute_lap_metrics(ref_df)
+                metrics_text += "\n\n" + lap_metrics_text(m_ref, "(reference)")
+                metrics_text += "\n\n" + lap_metrics_delta_text(m_own, m_ref)
+            auto_symptoms = auto_detect_symptoms(m_own, m_ref)
+            st.success(f"✅ Telemetri indlæst — {len(auto_symptoms)} symptom(er) fundet automatisk i data")
+        except Exception as e:
+            st.error(f"Kunne ikke læse CSV: {e}")
+
     with su2:
         st.markdown("#### ⚠️ Hvad føles forkert?")
+        if auto_symptoms:
+            st.caption("🔎 Auto-fundet fra telemetri: " + ", ".join(auto_symptoms))
         symptoms = st.multiselect("Vælg symptomer", [
             "Understeer — bilen skubber ud foran (for meget)",
             "Oversteer — bagende slipper (for meget)",
@@ -868,7 +940,7 @@ with t_setup:
             "For meget understyring i sving-midte",
             "Dækkene overopheder (for meget greb i starten, tabes hurtigt)",
             "Dækkene er aldrig varme nok",
-        ], key="setup_symptoms")
+        ], default=auto_symptoms, key="setup_symptoms")
 
         st.markdown("#### 💬 Beskriv med egne ord")
         free_text = st.text_area(
@@ -890,8 +962,8 @@ with t_setup:
 
     st.markdown("---")
     if st.button("🔧 Få setup-råd", key="btn_setup"):
-        if not symptoms and not free_text.strip():
-            st.warning("Beskriv mindst ét symptom eller skriv hvad du oplever.")
+        if not symptoms and not free_text.strip() and not metrics_text:
+            st.warning("Beskriv mindst ét symptom, upload telemetri, eller skriv hvad du oplever.")
         else:
             sys_p = f"""Du er en erfaren iRacing race engineer specialiseret i setup-justeringer.
 Du modtager en beskrivelse af bilens adfærd og skal give konkrete, handlingsbare setup-råd.
@@ -900,10 +972,14 @@ NIVEAU: {LEVEL[skill]}
 
 Svar ALTID på dansk. Vær KONKRET — angiv præcis hvilken parameter der justeres, hvilken retning og ca. hvor meget.
 
+Hvis der er telemetri-tal med i beskeden, SKAL diagnosen tage udgangspunkt i de faktiske tal
+frem for kun de afkrydsede symptomer — de afkrydsede/auto-fundne symptomer er et udgangspunkt,
+tallene er beviset. Nævn konkrete tal fra telemetrien i diagnosen, hvor det er relevant.
+
 Strukturér svaret præcis sådan:
 
 ## 🔍 Diagnose
-[Forklar hvad der sandsynligvis forårsager symptomerne — kort og præcist]
+[Forklar hvad der sandsynligvis forårsager symptomerne — kort og præcist. Brug telemetri-tallene som evidens hvis de er givet.]
 
 ## 🔧 Anbefalede justeringer
 [For hver justering: parameter → retning → ca. mængde → hvorfor det hjælper]
@@ -928,6 +1004,8 @@ Brug dette format per justering:
             ])
             if setup_content:
                 user_msg += "\n\nSetup-fil (uddrag):\n" + setup_content[:3000]
+            if metrics_text:
+                user_msg += "\n\n" + metrics_text
             with st.spinner("Ingeniøren beregner justeringer…"):
                 result = call_ai(sys_p, user_msg)
             st.session_state.log.append({
