@@ -15,6 +15,7 @@ import datetime, io, json
 
 from engine.setup_logic import list_classes, list_cars, params_as_text, validate_setup_changes
 from engine.coaching_tips import get_track_data
+from data.tracks import TRACK_DB
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -882,7 +883,19 @@ with t_setup:
         setup_class = st.selectbox("Bil-klasse", list_classes(), key="setup_class")
         cars_in_class = list_cars(setup_class)
         setup_car   = st.selectbox("Bil", cars_in_class or ["Andet"], key="setup_car")
-        setup_track = st.text_input("Bane", placeholder="f.eks. Navarra, Le Mans…", key="setup_track")
+        track_options = ["— vælg eller skriv selv —"] + sorted(TRACK_DB.keys()) + ["Andet (skriv selv)"]
+        track_choice = st.selectbox("Bane", track_options, key="setup_track_choice")
+        if track_choice == "Andet (skriv selv)" or track_choice == "— vælg eller skriv selv —":
+            setup_track = st.text_input("Banenavn", placeholder="f.eks. Navarra, Le Mans…", key="setup_track")
+        else:
+            setup_track = track_choice
+
+        if setup_track:
+            td_preview = get_track_data(setup_track)
+            if td_preview.get("map"):
+                with st.expander(f"🗺️ Bane-kort: {setup_track}", expanded=False):
+                    st.image(td_preview["map"], caption=f"{setup_track} — kort: Wikimedia Commons (CC BY-SA)", use_container_width=True)
+
         setup_session = st.selectbox("Session-type", [
             "Practice", "Qualifying", "Race — start (fuld tank)",
             "Race — slutning (tom tank)"], key="setup_sess")
@@ -1016,11 +1029,6 @@ Hvis en værdi er ukendt/ikke relevant, brug null — udelad aldrig felterne."""
                 user_msg += "\n\n" + metrics_text
             if car_ref:
                 user_msg += "\n\n" + car_ref
-            if setup_track:
-                td = get_track_data(setup_track)
-                if td["notes"] and "Info" not in td["notes"]:
-                    note_lines = "\n".join(f"- {k}: {v}" for k, v in td["notes"].items())
-                    user_msg += f"\n\n=== Bane-noter for {setup_track} ===\n{note_lines}"
             with st.spinner("Ingeniøren beregner justeringer…"):
                 raw = call_ai(sys_p, user_msg, json_mode=True)
 
