@@ -715,7 +715,27 @@ def params_as_text(car_class: str, car_name: str) -> str:
     return "\n".join(lines)
 
 
-def coverage_report() -> dict[str, list[str]]:
+def validate_setup_changes(car_class: str, car_name: str, changes: list[dict]) -> list[dict]:
+    """Tjekker en liste af foreslåede parameter-ændringer
+    ({"parameter": ..., "forslag": <tal>}) mod reference-intervallerne
+    og tilføjer en 'advarsel'-nøgle hvis forslaget ligger uden for range.
+    Ukendte parametre (ikke i databasen for bilen) rammer ingen advarsel —
+    vi kan kun validere det vi selv har data for."""
+    car = get_car_params(car_class, car_name)
+    checked = []
+    for ch in changes:
+        ch = dict(ch)
+        key = ch.get("parameter")
+        val = ch.get("forslag")
+        if car and key in car["params"] and isinstance(val, (int, float)):
+            lo, hi = car["params"][key]["range"]
+            if val < lo or val > hi:
+                ch["advarsel"] = f"Uden for reference-interval ({lo}–{hi})"
+        checked.append(ch)
+    return checked
+
+
+
     """Viser hvilke biler i CLASS_ROSTER der endnu ikke har en CAR_DB-post —
     brug denne til at prioritere hvilke biler der skal tilføjes næste gang."""
     missing = {}
