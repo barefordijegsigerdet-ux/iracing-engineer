@@ -1,6 +1,9 @@
 """
-Tynd wrapper omkring data/tracks.py.
+Tynd wrapper omkring data/cars.py — holder app.py fri for at kende til
+databasens interne struktur.
 """
-from data.tracks import list_categories, get_track_data, coverage_report
+from data.cars import (
+    list_classes, list_cars, get_car_params, params_as_text, coverage_report
+)
 
-__all__ = ["list_categories", "get_track_data", "coverage_report"]
+__all__ = ["list_classes", "list_cars", "get_car_params", "params_as_text", "coverage_report"]
