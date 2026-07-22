@@ -11,9 +11,9 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import datetime, io
+import datetime, io, json
 
-from engine.setup_logic import list_classes, list_cars, params_as_text
+from engine.setup_logic import list_classes, list_cars, params_as_text, validate_setup_changes
 from engine.coaching_tips import get_track_data
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -493,16 +493,18 @@ def compare_chart(dfa: pd.DataFrame, dfb: pd.DataFrame,
 # ═════════════════════════════════════════════════════════════════════════════
 #  GEMINI
 # ═════════════════════════════════════════════════════════════════════════════
-def call_ai(system: str, user: str) -> str:
+def call_ai(system: str, user: str, json_mode: bool = False) -> str:
     try:
         key = st.secrets["GEMINI_API_KEY"]
     except KeyError:
         st.error("❌ Mangler 'GEMINI_API_KEY' i Streamlit Secrets!")
         st.stop()
     genai.configure(api_key=key)
+    gen_config = {"response_mime_type": "application/json"} if json_mode else None
     model = genai.GenerativeModel(
         model_name="gemini-3.1-flash-lite",
         system_instruction=system,
+        generation_config=gen_config,
     )
     return model.generate_content(user).text
 
@@ -968,6 +970,7 @@ with t_setup:
         if not symptoms and not free_text.strip() and not metrics_text:
             st.warning("Beskriv mindst ét symptom, upload telemetri, eller skriv hvad du oplever.")
         else:
+            car_ref = params_as_text(setup_class, setup_car)
             sys_p = f"""Du er en erfaren iRacing race engineer specialiseret i setup-justeringer.
 Du modtager en beskrivelse af bilens adfærd og skal give konkrete, handlingsbare setup-råd.
 
@@ -979,27 +982,24 @@ Hvis der er telemetri-tal med i beskeden, SKAL diagnosen tage udgangspunkt i de 
 frem for kun de afkrydsede symptomer — de afkrydsede/auto-fundne symptomer er et udgangspunkt,
 tallene er beviset. Nævn konkrete tal fra telemetrien i diagnosen, hvor det er relevant.
 
-Hvis der er "Reference-intervaller" for bilen med i beskeden: brug dem til at holde dine
-justeringsforslag inden for realistiske grænser for netop den bil/klasse, og angiv forslag som
-konkrete tal inden for intervallet. Gør det klart at intervallerne er vejledende referenceværdier,
-ikke eksakte spil-grænser — brugeren skal altid bekræfte i garagen i spillet.
+Hvis der er "Reference-intervaller" for bilen med i beskeden: for hver justering du foreslår som
+matcher en af disse parametre, brug PRÆCIS samme parameter-nøgle (fx "spring_f", "camber_r") i feltet
+"parameter", og hold "forslag"-tallet inden for intervallet. For parametre der ikke findes i
+reference-intervallerne (fx frit tekst-parametre), brug en kort slug som parameter-nøgle.
+Gør "nuværende" til dit bedste bud ud fra en evt. vedlagt setup-fil — sæt den til null hvis du
+ikke kan udlede en nuværende værdi.
 
-Strukturér svaret præcis sådan:
-
-## 🔍 Diagnose
-[Forklar hvad der sandsynligvis forårsager symptomerne — kort og præcist. Brug telemetri-tallene som evidens hvis de er givet.]
-
-## 🔧 Anbefalede justeringer
-[For hver justering: parameter → retning → ca. mængde → hvorfor det hjælper]
-Brug dette format per justering:
-**[Parameter]:** [Retning og mængde] — [Kort forklaring]
-
-## ⚡ Prioritering
-[Hvilken justering har størst effekt? Start her.]
-
-## ⚠️ Pas på
-[Eventuelle trade-offs eller ting der kan gå galt med disse justeringer]
-"""
+Svar UDELUKKENDE med gyldig JSON (ingen markdown, ingen kodeblok-markører) i nøjagtig denne struktur:
+{{
+  "diagnose": "kort tekst, brug telemetri-tal som evidens hvis givet",
+  "setup_ændringer": [
+    {{"parameter": "spring_f", "label": "Front fjederrate", "nuværende": 150.0, "forslag": 165.0,
+      "enhed": "N/mm", "retning": "stivere", "begrundelse": "kort hvorfor"}}
+  ],
+  "prioritering": ["første og vigtigste ændring at prøve", "dernæst"],
+  "pas_paa": "kort tekst om trade-offs eller risici ved forslagene"
+}}
+Hvis en værdi er ukendt/ikke relevant, brug null — udelad aldrig felterne."""
             when_str = ", ".join(corner_type) if corner_type else "ikke specificeret"
             sym_str  = "\n".join(f"- {s}" for s in symptoms) if symptoms else "Ikke valgt via liste"
             user_msg = "\n".join([
@@ -1014,7 +1014,6 @@ Brug dette format per justering:
                 user_msg += "\n\nSetup-fil (uddrag):\n" + setup_content[:3000]
             if metrics_text:
                 user_msg += "\n\n" + metrics_text
-            car_ref = params_as_text(setup_class, setup_car)
             if car_ref:
                 user_msg += "\n\n" + car_ref
             if setup_track:
@@ -1023,14 +1022,68 @@ Brug dette format per justering:
                     note_lines = "\n".join(f"- {k}: {v}" for k, v in td["notes"].items())
                     user_msg += f"\n\n=== Bane-noter for {setup_track} ===\n{note_lines}"
             with st.spinner("Ingeniøren beregner justeringer…"):
-                result = call_ai(sys_p, user_msg)
+                raw = call_ai(sys_p, user_msg, json_mode=True)
+
+            parsed = None
+            try:
+                parsed = json.loads(raw)
+            except (ValueError, TypeError):
+                parsed = None
+
+            if parsed and isinstance(parsed.get("setup_ændringer"), list):
+                changes = validate_setup_changes(setup_class, setup_car, parsed["setup_ændringer"])
+
+                st.markdown("### 🔍 Diagnose")
+                st.markdown(parsed.get("diagnose", ""))
+
+                st.markdown("### 🔧 Foreslåede justeringer")
+                rows = []
+                for ch in changes:
+                    rows.append({
+                        "Parameter":  ch.get("label") or ch.get("parameter", "—"),
+                        "Nuværende":  ch.get("nuværende") if ch.get("nuværende") is not None else "—",
+                        "Forslag":    ch.get("forslag") if ch.get("forslag") is not None else "—",
+                        "Enhed":      ch.get("enhed", ""),
+                        "Retning":    ch.get("retning", ""),
+                        "⚠️":        ch.get("advarsel", ""),
+                    })
+                if rows:
+                    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+                    for ch in changes:
+                        if ch.get("begrundelse"):
+                            label = ch.get("label") or ch.get("parameter", "—")
+                            st.caption(f"**{label}:** {ch['begrundelse']}")
+                if any(ch.get("advarsel") for ch in changes):
+                    st.warning("⚠️ Et eller flere forslag ligger uden for reference-intervallet for denne bil — dobbelttjek i garagen før du kører med det.")
+
+                if parsed.get("prioritering"):
+                    st.markdown("### ⚡ Prioritering")
+                    for i, p in enumerate(parsed["prioritering"], 1):
+                        st.markdown(f"{i}. {p}")
+
+                if parsed.get("pas_paa"):
+                    st.markdown("### ⚠️ Pas på")
+                    st.markdown(parsed["pas_paa"])
+
+                result = (
+                    f"## Diagnose\n{parsed.get('diagnose','')}\n\n"
+                    f"## Justeringer\n" + "\n".join(
+                        f"- {ch.get('label') or ch.get('parameter')}: "
+                        f"{ch.get('nuværende','—')} → {ch.get('forslag','—')} {ch.get('enhed','')} "
+                        f"({ch.get('begrundelse','')})" for ch in changes
+                    )
+                )
+            else:
+                st.warning("Kunne ikke læse strukturerede justeringer fra svaret — viser rå tekst i stedet.")
+                st.markdown(raw)
+                result = raw
+
             st.session_state.log.append({
                 "time":  datetime.datetime.now().strftime("%H:%M"),
                 "type":  f"Setup: {setup_car}",
                 "track": setup_track or "—",
                 "content": result,
             })
-            st.markdown(result)
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  TAB: LÆR TELEMETRI
