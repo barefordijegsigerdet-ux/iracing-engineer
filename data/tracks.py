@@ -37,6 +37,10 @@ TRACK_DB = {
     "Spa-Francorchamps":         {"map": _WIKI + "Spa-Francorchamps of Belgium.svg"},
     "Nürburgring GP":            {"map": _WIKI + "Nürburgring - Grand-Prix-Strecke.svg"},
     "Nürburgring Nordschleife":  {"map": _WIKI + "Nordschleife.svg"},
+    "Monza":                     {"map": _WIKI + "Monza track map.svg"},
+    "Silverstone":               {"map": _WIKI + "Circuit Silverstone 2011.svg"},
+    "Paul Ricard":                {"map": _WIKI + "Circuit Paul Ricard 2020 layout map.svg"},
+    "Barcelona":                  {"map": _WIKI + "Formula1 Circuit Catalunya 2021.svg"},
 }
 
 
