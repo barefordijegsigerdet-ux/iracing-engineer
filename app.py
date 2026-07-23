@@ -382,7 +382,83 @@ def auto_detect_symptoms(m_own: dict, m_ref: dict | None = None) -> list[str]:
     return found
 
 
-def lap_chart(df: pd.DataFrame, title: str = "") -> go.Figure:
+def find_loss_zones(dfa: pd.DataFrame, dfb: pd.DataFrame, resample_n: int = 2000,
+                     min_zone_pct: float = 1.0, top_n: int = 5) -> list[dict]:
+    """Finder automatisk de zoner på banen (som LapDistPct-interval) hvor
+    'dfa' (din omgang) taber mest tid til 'dfb' (reference) — samme
+    kumulativ-delta-matematik som graf en i Sammenlign omgange, men brudt
+    ned i konkrete tabszoner i stedet for én kurve. Kun tal fra faktisk
+    telemetri — ingen bane-specifik antagelse eller navngivning indgår."""
+    ra = resample_to(dfa, resample_n)
+    rb = resample_to(dfb, resample_n)
+    dist_pct = ra["LapDistPct"].values * 100
+
+    d_dist = np.diff(ra["LapDistPct"].values, prepend=ra["LapDistPct"].values[0])
+    d_dist = np.where(d_dist <= 0, 1e-9, d_dist)
+    v_a = np.where(ra["Speed"].values > 0, ra["Speed"].values, 1e-9)
+    v_b = np.where(rb["Speed"].values > 0, rb["Speed"].values, 1e-9)
+    dt_a = d_dist / v_a
+    dt_b = d_dist / v_b
+    loss_rate = (dt_a - dt_b) * 3600.0  # sekunder tabt pr. punkt; positiv = din omgang (a) langsommere
+
+    window = max(3, resample_n // 200)
+    loss_smooth = np.convolve(loss_rate, np.ones(window) / window, mode="same")
+
+    zones, in_zone, start_idx = [], False, 0
+    for i, v in enumerate(loss_smooth):
+        if v > 0 and not in_zone:
+            in_zone, start_idx = True, i
+        elif v <= 0 and in_zone:
+            in_zone = False
+            zones.append((start_idx, i))
+    if in_zone:
+        zones.append((start_idx, len(loss_smooth)))
+
+    min_pts = max(1, int(resample_n * min_zone_pct / 100))
+    results = []
+    for s, e in zones:
+        if e - s < min_pts:
+            continue
+        total_loss = float(loss_rate[s:e].sum())
+        if total_loss <= 0:
+            continue
+        e_clamped = min(e, len(dist_pct) - 1)
+        speed_delta = float(np.mean(rb["Speed"].values[s:e] - ra["Speed"].values[s:e]))
+        entry = {
+            "start_pct": round(float(dist_pct[s]), 1),
+            "end_pct":   round(float(dist_pct[e_clamped]), 1),
+            "loss_s":    round(total_loss, 3),
+            "speed_delta_kmh": round(speed_delta, 1),
+        }
+        if "BrakePct" in ra.columns:
+            entry["brake_delta_pct"] = round(float(np.mean(ra["BrakePct"].values[s:e] - rb["BrakePct"].values[s:e])), 1)
+        if "ThrottlePct" in ra.columns:
+            entry["throttle_delta_pct"] = round(float(np.mean(rb["ThrottlePct"].values[s:e] - ra["ThrottlePct"].values[s:e])), 1)
+        results.append(entry)
+
+    results.sort(key=lambda r: -r["loss_s"])
+    return results[:top_n]
+
+
+def loss_zones_text(zones: list[dict]) -> str:
+    if not zones:
+        return ""
+    lines = ["=== Tabszoner fundet i telemetri (LapDistPct-position, ikke gættet — udregnet) ==="]
+    for z in zones:
+        parts = [f"{z['start_pct']}–{z['end_pct']}% af omgangen: taber {z['loss_s']}s"]
+        sd = z.get("speed_delta_kmh", 0)
+        parts.append(f"{abs(sd)} km/h {'langsommere' if sd > 0 else 'hurtigere'} end reference i snit")
+        if z.get("brake_delta_pct") is not None and abs(z["brake_delta_pct"]) > 3:
+            b = z["brake_delta_pct"]
+            parts.append(f"bremser {abs(b)}%-point {'mere' if b > 0 else 'mindre'} end reference")
+        if z.get("throttle_delta_pct") is not None and abs(z["throttle_delta_pct"]) > 3:
+            t = z["throttle_delta_pct"]
+            parts.append(f"{abs(t)}%-point {'mindre' if t > 0 else 'mere'} gas end reference")
+        lines.append("- " + ", ".join(parts))
+    return "\n".join(lines)
+
+
+
     x   = df["LapDistPct"].values * 100
     fig = make_subplots(
         rows=4, cols=1, shared_xaxes=True,
@@ -924,19 +1000,30 @@ with t_setup:
 
     metrics_text = ""
     auto_symptoms: list[str] = []
+    zones_text = ""
     if own_lap_file:
         try:
             own_df = load_lap_csv(own_lap_file.read())
             m_own  = compute_lap_metrics(own_df)
             metrics_text = lap_metrics_text(m_own, "(din omgang)")
             m_ref = None
+            zones = []
             if ref_lap_file:
                 ref_df = load_lap_csv(ref_lap_file.read())
                 m_ref  = compute_lap_metrics(ref_df)
                 metrics_text += "\n\n" + lap_metrics_text(m_ref, "(reference)")
                 metrics_text += "\n\n" + lap_metrics_delta_text(m_own, m_ref)
+                zones = find_loss_zones(own_df, ref_df)
+                zones_text = loss_zones_text(zones)
             auto_symptoms = auto_detect_symptoms(m_own, m_ref)
             st.success(f"✅ Telemetri indlæst — {len(auto_symptoms)} symptom(er) fundet automatisk i data")
+            if zones:
+                st.markdown("##### 📍 Tabszoner fundet i telemetrien (position på banen, ikke gæt)")
+                st.dataframe(pd.DataFrame(zones).rename(columns={
+                    "start_pct": "Start (%)", "end_pct": "Slut (%)", "loss_s": "Tabt tid (s)",
+                    "speed_delta_kmh": "Δ Fart (km/h)", "brake_delta_pct": "Δ Bremse (%)",
+                    "throttle_delta_pct": "Δ Gas (%)",
+                }), hide_index=True, use_container_width=True)
         except Exception as e:
             st.error(f"Kunne ikke læse CSV: {e}")
 
@@ -995,6 +1082,12 @@ Hvis der er telemetri-tal med i beskeden, SKAL diagnosen tage udgangspunkt i de 
 frem for kun de afkrydsede symptomer — de afkrydsede/auto-fundne symptomer er et udgangspunkt,
 tallene er beviset. Nævn konkrete tal fra telemetrien i diagnosen, hvor det er relevant.
 
+Hvis der er "Tabszoner fundet i telemetri" med i beskeden: dette er udregnede positioner på banen
+(som % af omgangen) hvor føreren rent faktisk taber tid til referencen — IKKE en gættet
+bane-beskrivelse. Brug disse positioner direkte i diagnosen (fx "ved 34–41% af omgangen taber du
+0.3s, med 8 km/h lavere fart og mere bremsning end reference") i stedet for at referere til
+navngivne sving, som du ikke kan vide er korrekte for netop denne bane.
+
 Hvis der er "Reference-intervaller" for bilen med i beskeden: for hver justering du foreslår som
 matcher en af disse parametre, brug PRÆCIS samme parameter-nøgle (fx "spring_f", "camber_r") i feltet
 "parameter", og hold "forslag"-tallet inden for intervallet. For parametre der ikke findes i
@@ -1027,6 +1120,8 @@ Hvis en værdi er ukendt/ikke relevant, brug null — udelad aldrig felterne."""
                 user_msg += "\n\nSetup-fil (uddrag):\n" + setup_content[:3000]
             if metrics_text:
                 user_msg += "\n\n" + metrics_text
+            if zones_text:
+                user_msg += "\n\n" + zones_text
             if car_ref:
                 user_msg += "\n\n" + car_ref
             with st.spinner("Ingeniøren beregner justeringer…"):
