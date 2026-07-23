@@ -736,6 +736,7 @@ def validate_setup_changes(car_class: str, car_name: str, changes: list[dict]) -
 
 
 
+def coverage_report() -> dict[str, list[str]]:
     """Viser hvilke biler i CLASS_ROSTER der endnu ikke har en CAR_DB-post —
     brug denne til at prioritere hvilke biler der skal tilføjes næste gang."""
     missing = {}
